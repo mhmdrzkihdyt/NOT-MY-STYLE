@@ -1,0 +1,443 @@
+PENYESUAIIAN UI DAN PERBAIKAN BUG GAME
+
+Lakukan seluruh perubahan berikut pada aplikasi agar UI lebih sederhana dan seluruh fitur gameplay bekerja secara konsisten.
+
+PENYEDERHANAAN UI
+
+Hapus Sistem Grade
+
+Hapus seluruh fitur Grade dari aplikasi.
+
+Jangan tampilkan:
+
+
+
+Grade S
+
+Grade A
+
+Grade B
+
+Grade C
+
+Grade D
+
+Hapus seluruh logika yang berkaitan dengan:
+
+
+
+Perhitungan Grade
+
+Tampilan Grade
+
+Badge Grade
+
+Informasi Grade pada modal kemenangan
+
+Informasi Grade pada Status Bar
+
+Informasi Grade pada halaman level
+
+Hapus Visual Match
+
+Hapus seluruh fitur:
+
+
+
+Visual Match
+
+Match Percentage
+
+Persentase Kecocokan
+
+Progress Bar Kecocokan
+
+Contoh yang harus dihapus:
+
+
+
+Visual Match 87%
+
+████████░░
+
+atau
+
+
+
+🎯 87%
+
+Hapus seluruh logika perhitungannya.
+
+Status Bar Baru
+
+Status Bar saat bermain hanya menampilkan:
+
+
+
+❤️ Nyawa
+
+⏱ Timer
+
+⭐ Skor
+
+💡 Hint Digunakan
+
+✓ Status Siap Diperiksa
+
+Jangan tampilkan:
+
+
+
+🏆 Grade
+
+🎯 Visual Match
+
+Modal Kemenangan
+
+Pada modal:
+
+
+
+LEVEL BERHASIL DISELESAIKAN
+
+Tampilkan hanya:
+
+
+
+Skor
+
+Waktu Tersisa
+
+Jumlah Hint Digunakan
+
+Bintang yang Diperoleh
+
+Jangan tampilkan Grade.
+
+SPLASH SCREEN
+
+Hapus Versi Aplikasi
+
+Jangan tampilkan:
+
+
+
+v2.0
+
+Version 2.0
+
+atau informasi versi lainnya.
+
+Judul hanya:
+
+
+
+NOT MY STYLE
+
+Ubah Subjudul
+
+Ganti:
+
+
+
+GAME EDUKASI CSS & IMK
+
+menjadi:
+
+
+
+GAME EDUKASI CSS
+
+Pastikan berlaku pada seluruh halaman yang masih menggunakan teks lama.
+
+PERBAIKAN BUG LIVE PREVIEW
+
+Layout Tidak Boleh Bergeser
+
+Saat modal kemenangan muncul:
+
+Jangan sampai:
+
+
+
+Tombol Hint bergeser
+
+Tombol Periksa Jawaban bergeser
+
+Status Bar berubah posisi
+
+Panel berubah ukuran
+
+Gunakan:
+
+
+
+position: fixed;
+
+untuk seluruh modal.
+
+Modal harus berupa overlay.
+
+Muncul dan hilangnya modal tidak boleh mengubah layout utama.
+
+Font Size Tidak Mengubah Preview (Level 2)
+
+Saat pemain mengubah:
+
+
+
+font-size
+
+preview pada:
+
+
+
+HASIL NILAIMU
+
+harus langsung berubah.
+
+Contoh:
+
+
+
+font-size: 24px;
+
+menjadi:
+
+
+
+font-size: 48px;
+
+ukuran teks harus langsung berubah secara real-time.
+
+Gap Tidak Mengubah Preview (Level 3)
+
+Saat pemain mengubah:
+
+
+
+gap
+
+jarak antar elemen harus langsung berubah pada preview.
+
+Perubahan harus real-time.
+
+Gap Tidak Mengubah Preview (Level 4)
+
+Bug yang sama harus diperbaiki.
+
+Nilai:
+
+
+
+gap
+
+harus langsung memengaruhi layout preview.
+
+Semua Properti Ukuran Harus Real-Time
+
+Pastikan seluruh properti berikut langsung mengubah preview:
+
+
+
+font-size
+
+line-height
+
+letter-spacing
+
+gap
+
+border-radius
+
+width
+
+height
+
+padding
+
+margin
+
+Perubahan input harus langsung mengubah tampilan preview.
+
+Tidak boleh membutuhkan refresh.
+
+Preview Harus Selalu Sinkron
+
+Alur yang wajib terjadi:
+
+
+
+Input berubah
+
+↓
+
+State berubah
+
+↓
+
+Preview dirender ulang
+
+↓
+
+Tampilan berubah
+
+Tidak boleh ada kondisi:
+
+
+
+Input berubah
+
+State berubah
+
+Preview tetap sama
+
+Preview harus selalu mencerminkan nilai terbaru.
+
+ISOLASI PREVIEW
+
+CSS yang sedang dimainkan tidak boleh mengubah UI aplikasi.
+
+Contoh yang tidak boleh terjadi:
+
+
+
+Tombol Periksa Jawaban ikut berubah ukuran
+
+Status Bar ikut berubah
+
+Header ikut berubah
+
+Panel Editor ikut berubah
+
+CSS level hanya boleh memengaruhi:
+
+
+
+HASIL NILAIMU
+
+dan
+
+
+
+TARGET
+
+Gunakan style isolation atau scoped styling.
+
+BATAS CONTAINER PREVIEW
+
+Jika pemain memasukkan nilai ekstrem:
+
+
+
+font-size: 500px;
+
+gap: 300px;
+
+width: 2000px;
+
+preview tidak boleh merusak layout aplikasi.
+
+Container HASIL NILAIMU harus memiliki perilaku:
+
+
+
+overflow: auto;
+
+max-width: 100%;
+
+max-height: 100%;
+
+atau pendekatan setara.
+
+Jika preview terlalu besar:
+
+
+
+Munculkan scrollbar
+
+Jangan merusak layout aplikasi
+
+MODAL WAJIB CUSTOM UI
+
+Jangan gunakan:
+
+
+
+alert()
+
+confirm()
+
+prompt()
+
+untuk kondisi apa pun.
+
+Seluruh Popup Harus Menggunakan Modal React
+
+Semua kondisi berikut wajib menggunakan modal custom:
+
+
+
+Jawaban Salah
+
+JAWABAN MASIH BELUM SESUAI
+
+Jawaban Benar
+
+LEVEL BERHASIL DISELESAIKAN
+
+Hint
+
+SELESAIKAN SOAL UNTUK MENDAPATKAN HINT
+
+Game Over
+
+GAME OVER
+
+Keluar dari Level
+
+KELUAR DARI LEVEL?
+
+Nyawa Habis
+
+NYAWA HABIS
+
+Jawaban Pemulihan Salah
+
+JAWABAN SALAH
+
+Nyawa Berhasil Dipulihkan
+
+NYAWA BERHASIL DIPULIHKAN
+
+TUJUAN AKHIR
+
+Pastikan:
+
+
+
+Grade dihapus sepenuhnya.
+
+Visual Match dihapus sepenuhnya.
+
+Tidak ada tampilan versi aplikasi.
+
+Subjudul menjadi "GAME EDUKASI CSS".
+
+Semua properti CSS memengaruhi Live Preview.
+
+Font-size berubah secara real-time.
+
+Gap berubah secara real-time.
+
+Preview selalu sinkron dengan input.
+
+Preview tidak merusak layout aplikasi.
+
+CSS level tidak memengaruhi UI utama aplikasi.
+
+Modal tidak menggeser layout.
+
+Tidak ada penggunaan alert(), confirm(), atau prompt().
+
+Seluruh popup menggunakan modal UI yang konsisten.
