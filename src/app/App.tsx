@@ -227,6 +227,8 @@ export default function App() {
   const [leaderboardData, setLeaderboardData] = useState<api.LeaderboardEntry[]>([]);
   const [devPlayers, setDevPlayers] = useState<api.PlayerData[]>([]);
   const [revealedPasswords, setRevealedPasswords] = useState<Set<string>>(new Set());
+  const [devLeaderboard, setDevLeaderboard] = useState<api.LeaderboardEntry[]>([]);
+  const [devLeaderboardLoading, setDevLeaderboardLoading] = useState(false);
 
   // Creator state
   const [creatorTitle, setCreatorTitle] = useState('');
@@ -299,6 +301,28 @@ export default function App() {
             totalScore: p.totalScore, levelsPlayed: p.levelsPlayed,
             stars: p.stars, totalTime: p.totalTime, createdAt: p.createdAt,
           })));
+        });
+    }
+  }, [devTab, currentUser]);
+
+  // ─── LOAD DEV LEADERBOARD WHEN OVERVIEW TAB ─────────────────────────────
+  useEffect(() => {
+    if (devTab === 'overview' && currentUser?.role === 'developer') {
+      setDevLeaderboardLoading(true);
+      api.getLeaderboard()
+        .then(data => {
+          setDevLeaderboard(data);
+          localStorage.setItem('nms_dev_leaderboard', JSON.stringify(data));
+          setDevLeaderboardLoading(false);
+        })
+        .catch(err => {
+          console.error('[API] Failed to load dev leaderboard:', err.message);
+          // Fallback: try localStorage
+          const cached = localStorage.getItem('nms_dev_leaderboard');
+          if (cached) {
+            try { setDevLeaderboard(JSON.parse(cached)); } catch {}
+          }
+          setDevLeaderboardLoading(false);
         });
     }
   }, [devTab, currentUser]);
@@ -428,6 +452,14 @@ export default function App() {
 
   // ─── REVIVE COUNTDOWN ─────────────────────────────────────────────────────
   useEffect(() => {
+    // If lives are already full (3/3), stop the countdown entirely
+    if (globalLives >= 3) {
+      setReviveCountdown(0);
+      setReviveLivesQueue(0);
+      localStorage.removeItem('nms_revive_end');
+      localStorage.removeItem('nms_revive_queue');
+      return;
+    }
     if (reviveCountdown > 0) {
       const timer = setTimeout(() => setReviveCountdown(c => c - 1), 1000);
       return () => clearTimeout(timer);
@@ -438,22 +470,30 @@ export default function App() {
         if (currentUser) {
           api.updateLives(currentUser.username, newLives).catch(() => {});
         }
+        // If lives reach 3 after restore, clear everything
+        if (newLives >= 3) {
+          setReviveLivesQueue(0);
+          localStorage.removeItem('nms_revive_end');
+          localStorage.removeItem('nms_revive_queue');
+          setShowReviveSuccessModal(true);
+        }
         return newLives;
       });
       const remaining = reviveLivesQueue - 1;
-      setReviveLivesQueue(remaining);
       if (remaining > 0) {
+        setReviveLivesQueue(remaining);
         const endTime = Date.now() + 300_000;
         localStorage.setItem('nms_revive_end', endTime.toString());
         localStorage.setItem('nms_revive_queue', remaining.toString());
         setReviveCountdown(300); // 5 minutes for next life
       } else {
+        setReviveLivesQueue(0);
         localStorage.removeItem('nms_revive_end');
         localStorage.removeItem('nms_revive_queue');
         setShowReviveSuccessModal(true);
       }
     }
-  }, [reviveCountdown, reviveLivesQueue]);
+  }, [reviveCountdown, reviveLivesQueue, globalLives]);
 
   // ─── SYNC CONTAINER HEIGHTS ─────────────────────────────────────────────
   useEffect(() => {
@@ -770,6 +810,8 @@ export default function App() {
   };
 
   const startReviveCountdown = () => {
+    // Don't start countdown if lives are already full
+    if (globalLives >= 3) return;
     // Restore 1 life every 5 minutes (not all at once)
     const newQueue = reviveLivesQueue + 1;
     setReviveLivesQueue(newQueue);
@@ -854,6 +896,11 @@ export default function App() {
     setRegSuccess('');
     setDevTab('overview');
     resetLevelsToDefault();
+    setScreen('splash');
+  };
+
+  const handleGoHome = () => {
+    // Go to splash screen WITHOUT logging out — session/token stays active
     setScreen('splash');
   };
 
@@ -1027,7 +1074,21 @@ export default function App() {
           Belajar UI/UX dan CSS melalui tantangan visual interaktif yang seru
         </p>
         <button
-          onClick={() => { setLoginError(''); setLoginRole('player'); setLoginUsername(''); setLoginPassword(''); setScreen('login'); }}
+          onClick={() => {
+            // If session is still active, go directly to the right screen
+            if (api.isLoggedIn()) {
+              const savedUser = api.getCurrentUser();
+              if (savedUser) {
+                if (!currentUser) {
+                  setCurrentUser({ username: savedUser.username, role: savedUser.role as 'player' | 'developer' });
+                  setGlobalLives(savedUser.lives ?? 3);
+                }
+                setScreen(savedUser.role === 'developer' ? 'developer' : 'player-gallery');
+                return;
+              }
+            }
+            setLoginError(''); setLoginRole('player'); setLoginUsername(''); setLoginPassword(''); setScreen('login');
+          }}
           className="group relative overflow-hidden rounded-2xl px-20 py-6 transition-all duration-300 hover:scale-105 hover:shadow-2xl"
           style={{ background: 'linear-gradient(135deg, #FFD93D, #F59E0B)', boxShadow: '0 8px 40px rgba(255,217,61,0.35)' }}>
           <div className="flex items-center gap-3">
@@ -1238,9 +1299,9 @@ export default function App() {
 
   // ─── DEVELOPER DASHBOARD ────────────────────────────────────────────────
   const renderDeveloperScreen = () => {
-    const totalPlayers = players.length;
-    const totalLevelsPlayed = players.reduce((a, p) => a + p.levelsPlayed, 0);
-    const totalScore = players.reduce((a, p) => a + p.totalScore, 0);
+    const totalPlayers = devLeaderboard.length || devPlayers.length || players.length;
+    const totalLevelsPlayed = devLeaderboard.reduce((a, p) => a + p.levelsPlayed, 0);
+    const totalScore = devLeaderboard.reduce((a, p) => a + p.totalScore, 0);
     const customLevels = levels.filter(l => l.isUserCreated);
 
     return (
@@ -1258,10 +1319,15 @@ export default function App() {
                 <span style={{ color: '#A78BFA', fontSize: '0.8rem', fontWeight: 600 }}>Muhamad Rizki Hidayat</span>
                 <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: '#6C5CE7', color: '#fff', fontWeight: 700 }}>DEV</span>
               </div>
-              <button onClick={handleLogout}
+              <button onClick={handleGoHome}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl hover:opacity-80"
                 style={{ background: '#2D2D3A', color: '#9CA3AF', fontWeight: 600 }}>
                 <Home className="w-4 h-4" />
+                Home
+              </button>
+              <button onClick={handleLogout}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl hover:opacity-80"
+                style={{ background: '#FF6B6B22', color: '#FF6B6B', fontWeight: 600, border: '1px solid #FF6B6B44' }}>
                 Logout
               </button>
             </div>
@@ -1331,11 +1397,22 @@ export default function App() {
                 RANKING <span style={{ color: '#FFD93D' }}>PLAYER</span>
               </h2>
               <div className="rounded-2xl overflow-hidden" style={{ background: '#1E1E2E' }}>
+                {devLeaderboardLoading ? (
+                  <div className="py-12 text-center">
+                    <div className="text-3xl mb-3 animate-bounce">⏳</div>
+                    <p style={{ color: '#6B7280' }}>Memuat data leaderboard...</p>
+                  </div>
+                ) : devLeaderboard.length === 0 ? (
+                  <div className="py-12 text-center">
+                    <div className="text-3xl mb-3">📭</div>
+                    <p style={{ color: '#6B7280' }}>Belum ada data pemain.</p>
+                  </div>
+                ) : (
                 <table className="w-full">
                   <thead>
                     <tr style={{ borderBottom: '1px solid #2D2D3A' }}>
                       <th className="text-center px-4 py-3" style={{ color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 700 }}>#</th>
-                      <th className="text-left px-6 py-3" style={{ color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 700 }}>USERNAME</th>
+                      <th className="text-left px-6 py-3" style={{ color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 700 }}>PLAYER</th>
                       <th className="text-center px-6 py-3" style={{ color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 700 }}>SKOR</th>
                       <th className="text-center px-6 py-3" style={{ color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 700 }}>LEVEL</th>
                       <th className="text-center px-6 py-3" style={{ color: '#9CA3AF', fontSize: '0.75rem', fontWeight: 700 }}>BINTANG</th>
@@ -1344,30 +1421,34 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...players].sort((a, b) => {
-                      // Rank: all levels completed first, then highest score, then fastest time
-                      const aAllDone = a.levelsPlayed >= levels.filter(l => !l.isUserCreated).length;
-                      const bAllDone = b.levelsPlayed >= levels.filter(l => !l.isUserCreated).length;
-                      if (aAllDone !== bAllDone) return bAllDone ? 1 : -1;
-                      if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
-                      return a.totalTime - b.totalTime; // fastest time wins
-                    }).map((p, idx) => (
-                      <tr key={p.username} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                        <td className="px-4 py-3 text-center" style={{ color: idx === 0 ? '#FFD93D' : idx === 1 ? '#C0C0C0' : idx === 2 ? '#CD7F32' : '#6B7280', fontWeight: 800, fontSize: '1.1rem' }}>
-                          {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : idx + 1}
-                        </td>
-                        <td className="px-6 py-3" style={{ color: '#FFFFFF', fontWeight: 600 }}>{p.username}</td>
-                        <td className="px-6 py-3 text-center" style={{ color: '#FFD93D', fontWeight: 700 }}>{p.totalScore}</td>
-                        <td className="px-6 py-3 text-center" style={{ color: '#4ADE80', fontWeight: 700 }}>{p.levelsPlayed}</td>
-                        <td className="px-6 py-3 text-center" style={{ color: '#FFD93D', fontWeight: 700 }}>⭐ {p.stars}</td>
-                        <td className="px-6 py-3 text-center" style={{ color: '#A78BFA', fontWeight: 600, fontFamily: 'monospace' }}>
-                          {p.totalTime > 0 ? `${p.totalTime}s` : '-'}
-                        </td>
-                        <td className="px-6 py-3 text-center" style={{ color: '#9CA3AF', fontWeight: 600 }}>{formatDate(p.createdAt)}</td>
-                      </tr>
-                    ))}
+                    {devLeaderboard.map((p, idx) => {
+                      const playerDetail = devPlayers.find(dp => dp.username === p.username);
+                      return (
+                        <tr key={p.username} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <td className="px-4 py-3 text-center" style={{ fontSize: '1.1rem' }}>
+                            {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : (
+                              <span style={{ color: '#6B7280', fontWeight: 700 }}>{idx + 1}</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-3">
+                            <div style={{ color: '#FFFFFF', fontWeight: 600 }}>{p.name || p.username}</div>
+                            <div style={{ color: '#6B7280', fontSize: '0.75rem' }}>@{p.username}</div>
+                          </td>
+                          <td className="px-6 py-3 text-center" style={{ color: '#FFD93D', fontWeight: 800, fontSize: '1.05rem' }}>{p.totalScore}</td>
+                          <td className="px-6 py-3 text-center" style={{ color: '#4ADE80', fontWeight: 700 }}>{p.levelsPlayed}</td>
+                          <td className="px-6 py-3 text-center" style={{ color: '#FFD93D', fontWeight: 700 }}>⭐ {p.stars}</td>
+                          <td className="px-6 py-3 text-center" style={{ color: '#A78BFA', fontWeight: 600, fontFamily: 'monospace' }}>
+                            {p.totalTime > 0 ? `${p.totalTime}s` : '-'}
+                          </td>
+                          <td className="px-6 py-3 text-center" style={{ color: '#9CA3AF', fontWeight: 600, fontSize: '0.85rem' }}>
+                            {playerDetail?.createdAt ? formatDate(playerDetail.createdAt) : '-'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
+                )}
               </div>
             </div>
           )}
@@ -1640,10 +1721,15 @@ export default function App() {
                   <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: '#4ADE80', color: '#052e16', fontWeight: 700 }}>PLAYER</span>
                 </div>
               )}
-              <button onClick={handleLogout}
-                className="flex items-center gap-2 px-5 py-2 rounded-xl transition-colors hover:opacity-80"
-                style={{ background: '#FF6B6B22', color: '#FF6B6B', fontWeight: 600, border: '1px solid #FF6B6B44' }}>
+              <button onClick={handleGoHome}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl transition-colors hover:opacity-80"
+                style={{ background: '#2D2D3A', color: '#9CA3AF', fontWeight: 600 }}>
                 <Home className="w-4 h-4" />
+                Home
+              </button>
+              <button onClick={handleLogout}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl transition-colors hover:opacity-80"
+                style={{ background: '#FF6B6B22', color: '#FF6B6B', fontWeight: 600, border: '1px solid #FF6B6B44' }}>
                 Logout
               </button>
             </div>
@@ -1652,26 +1738,20 @@ export default function App() {
 
         <div className="max-w-6xl mx-auto px-8 pt-8">
           <div className="flex items-center gap-3 mb-8 flex-wrap">
-            <div className="flex flex-col items-center gap-1">
-              <button onClick={handleLivesClick}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all hover:scale-105"
-                style={{ background: '#1E1E2E', border: '1px solid #FF6B6B44' }}>
+            <button onClick={handleLivesClick}
+              className="flex flex-col items-center justify-center px-4 py-2.5 rounded-xl transition-all hover:scale-105"
+              style={{ background: '#1E1E2E', border: `1px solid ${globalLives === 0 ? '#FF6B6B88' : '#FF6B6B44'}` }}>
+              <div className="flex items-center gap-2">
                 <span className="text-lg">❤️</span>
                 <span style={{ color: globalLives === 0 ? '#FF6B6B' : '#FFD93D', fontWeight: 700 }}>{globalLives}/3</span>
                 <span style={{ color: '#6B7280', fontSize: '0.75rem' }}>Nyawa</span>
-              </button>
-              {(reviveCountdown > 0 || reviveLivesQueue > 0) && (
-                <div className="px-3 py-2 rounded-xl text-center w-full" style={{ background: '#1E1E2E', border: '1px solid #FFD93D44' }}>
-                  <div style={{ fontFamily: 'monospace', fontSize: '1.1rem', color: '#FFD93D', fontWeight: 800 }}>
-                    ⏳ {Math.floor(reviveCountdown / 60)}:{(reviveCountdown % 60).toString().padStart(2, '0')}
-                  </div>
-                  <div style={{ color: '#4ADE80', fontSize: '0.65rem', fontWeight: 600 }}>+{reviveLivesQueue} nyawa antri</div>
-                  <div className="mt-1 w-full rounded-full h-1" style={{ background: '#2D2D3A' }}>
-                    <div className="h-1 rounded-full transition-all" style={{ width: `${((300 - reviveCountdown) / 300) * 100}%`, background: '#4ADE80' }} />
-                  </div>
+              </div>
+              {reviveCountdown > 0 && (
+                <div style={{ fontFamily: 'monospace', fontSize: '0.7rem', color: '#FFD93D', fontWeight: 700, marginTop: '2px' }}>
+                  ⏳ {Math.floor(reviveCountdown / 60)}:{(reviveCountdown % 60).toString().padStart(2, '0')}
                 </div>
               )}
-            </div>
+            </button>
             <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl" style={{ background: '#1E1E2E' }}>
               <span className="text-lg">🏆</span>
               <span style={{ color: '#FFD93D', fontWeight: 700 }}>{completedLevels}</span>
@@ -2696,10 +2776,15 @@ export default function App() {
                 style={{ background: '#2D2D3A', color: '#A78BFA', fontWeight: 600, border: '1px solid rgba(108,92,231,0.3)' }}>
                 ← {currentUser?.role === 'developer' ? 'Dashboard' : 'Gallery'}
               </button>
-              <button onClick={handleLogout}
+              <button onClick={handleGoHome}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl hover:opacity-80"
                 style={{ background: '#2D2D3A', color: '#9CA3AF', fontWeight: 600 }}>
                 <Home className="w-4 h-4" />
+                Home
+              </button>
+              <button onClick={handleLogout}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl hover:opacity-80"
+                style={{ background: '#FF6B6B22', color: '#FF6B6B', fontWeight: 600, border: '1px solid #FF6B6B44' }}>
                 Logout
               </button>
             </div>

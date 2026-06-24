@@ -1,6 +1,10 @@
 // Frontend API service layer - communicates with the backend server
 
-const API_BASE = '/api';
+// In production (Vercel), VITE_API_URL should point to the backend deployment URL.
+// In development, /api is proxied to localhost:3001 via vite.config.ts.
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api';
 
 function getToken(): string | null {
   return localStorage.getItem('nms_token');

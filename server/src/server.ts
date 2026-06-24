@@ -15,7 +15,24 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 // Middleware
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'https://not-my-style.vercel.app/', credentials: true }));
+const allowedOrigins = [
+  process.env.CLIENT_ORIGIN,
+  'http://localhost:5173',
+  'http://localhost:4173',
+  'https://not-my-style.vercel.app',
+].filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Allow any vercel.app subdomain for preview deployments
+    if (origin.endsWith('.vercel.app')) return callback(null, true);
+    callback(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '10mb' }));
 
 // Routes
