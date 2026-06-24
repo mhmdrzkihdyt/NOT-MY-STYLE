@@ -50,3 +50,4 @@ app.listen(PORT, async () => {
     console.error(`  3. Ensure SQL Server is running`);
   }
 });
+
