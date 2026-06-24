@@ -15,7 +15,7 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 // Middleware
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173', credentials: true }));
+app.use(cors({ origin: process.env.CLIENT_ORIGIN || 'https://not-my-style.vercel.app/', credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
 // Routes
