@@ -51,3 +51,18 @@ app.listen(PORT, async () => {
   }
 });
 
+// Start server (Hanya berjalan di lokal, di Vercel tidak akan memblokir)
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, async () => {
+    console.log(`[Server] Running on http://localhost:${PORT}`);
+    try {
+      await getPool();
+      console.log(`[Server] Database connected`);
+    } catch (err: any) {
+      console.error(`[Server] Database connection failed:`, err.message);
+    }
+  });
+}
+
+// WAJIB TAMBAHKAN INI UNTUK VERCEL
+export default app;
