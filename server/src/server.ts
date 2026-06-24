@@ -29,6 +29,7 @@ app.use('/api/players', playerRoutes);
 app.get('/api/health', async (_req, res) => {
   try {
     const pool = await getPool();
+    // 'SELECT 1' sudah valid untuk pengetesan koneksi PostgreSQL
     await pool.query('SELECT 1');
     res.json({ status: 'ok', db: 'connected' });
   } catch (err: any) {
@@ -36,33 +37,23 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
-// Start server
-app.listen(PORT, async () => {
-  console.log(`[Server] Running on http://localhost:${PORT}`);
-  try {
-    await getPool();
-    console.log(`[Server] Database connected: ${process.env.DB_NAME}`);
-  } catch (err: any) {
-    console.error(`[Server] Database connection failed:`, err.message);
-    console.error(`[Server] Make sure to:`);
-    console.error(`  1. Run database_schema.sql in SSMS`);
-    console.error(`  2. Update .env with correct DB credentials`);
-    console.error(`  3. Ensure SQL Server is running`);
-  }
-});
-
-// Start server (Hanya berjalan di lokal, di Vercel tidak akan memblokir)
+// FIX: Gabungkan & bersihkan logika listen agar tidak duplikat (mengakibatkan error EADDRINUSE di lokal)
+// Server hanya mendengarkan PORT secara manual jika TIDAK dijalankan di lingkungan serverless seperti Vercel
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, async () => {
     console.log(`[Server] Running on http://localhost:${PORT}`);
     try {
       await getPool();
-      console.log(`[Server] Database connected`);
+      console.log(`[Server] Database connected: ${process.env.DB_NAME || 'PostgreSQL'}`);
     } catch (err: any) {
       console.error(`[Server] Database connection failed:`, err.message);
+      console.error(`[Server] Make sure to:`);
+      console.error(`  1. Run your schema tables inside PostgreSQL (pgAdmin / psql)`);
+      console.error(`  2. Update .env with correct PostgreSQL credentials`);
+      console.error(`  3. Ensure PostgreSQL service is active and running`);
     }
   });
 }
 
-// WAJIB TAMBAHKAN INI UNTUK VERCEL
+// WAJIB TAMBAHKAN INI UNTUK VERCEL (Serverless Handler)
 export default app;
