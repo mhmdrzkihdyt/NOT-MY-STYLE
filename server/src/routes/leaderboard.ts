@@ -11,34 +11,36 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
     const pool = await getPool();
 
     // Count total dasar levels to determine "all completed" threshold
-    const dasarCountResult = await pool.request().query(
-      "SELECT COUNT(*) AS total FROM Levels WHERE LevelType = 'dasar'"
+    const dasarCountResult = await pool.query(
+      'SELECT COUNT(*) AS total FROM "Levels" WHERE "LevelType" = \'dasar\''
     );
-    const totalDasar: number = dasarCountResult.recordset[0]?.total ?? 0;
+    
+    // Di PostgreSQL, hasil COUNT(*) biasanya bertipe string (BigInt), jadi kita parsing ke integer
+    const totalDasar: number = parseInt(dasarCountResult.rows[0]?.total ?? '0', 10);
 
-    const result = await pool.request()
-      .input('totalDasar', totalDasar)
-      .query(`
-        SELECT
-          u.Username,
-          u.Name,
-          u.TotalScore,
-          u.LevelsPlayed,
-          u.TotalStars,
-          u.TotalTime,
-          CASE WHEN u.LevelsPlayed >= @totalDasar THEN 0 ELSE 1 END AS AllDasarBonus,
-          RANK() OVER (
-            ORDER BY
-              CASE WHEN u.LevelsPlayed >= @totalDasar THEN 0 ELSE 1 END ASC,
-              u.TotalScore DESC,
-              u.TotalTime ASC
-          ) AS Rank
-        FROM Users u
-        WHERE u.Role = 'player'
-        ORDER BY Rank
-      `);
+    // Eksekusi query dengan format PostgreSQL ($1 untuk parameter) dan properti .rows
+    const result = await pool.query(`
+      SELECT
+        u."Username",
+        u."Name",
+        u."TotalScore",
+        u."LevelsPlayed",
+        u."TotalStars",
+        u."TotalTime",
+        CASE WHEN u."LevelsPlayed" >= $1 THEN 0 ELSE 1 END AS "AllDasarBonus",
+        RANK() OVER (
+          ORDER BY
+            CASE WHEN u."LevelsPlayed" >= $1 THEN 0 ELSE 1 END ASC,
+            u."TotalScore" DESC,
+            u."TotalTime" ASC
+        ) AS "Rank"
+      FROM "Users" u
+      WHERE u."Role" = 'player'
+      ORDER BY "Rank"
+    `, [totalDasar]);
 
-    const leaderboard = result.recordset.map((p: any) => ({
+    // Memetakan properti dari result.rows
+    const leaderboard = result.rows.map((p: any) => ({
       rank: Number(p.Rank),
       username: p.Username,
       name: p.Name,

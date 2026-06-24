@@ -29,7 +29,7 @@ app.use('/api/players', playerRoutes);
 app.get('/api/health', async (_req, res) => {
   try {
     const pool = await getPool();
-    await pool.request().query('SELECT 1');
+    await pool.query('SELECT 1');
     res.json({ status: 'ok', db: 'connected' });
   } catch (err: any) {
     res.status(500).json({ status: 'error', db: err.message });

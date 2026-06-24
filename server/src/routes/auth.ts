@@ -24,31 +24,31 @@ router.post('/register', async (req: AuthRequest, res: Response) => {
 
     const pool = await getPool();
 
-    // Check existing user
-    const existing = await pool.request()
-      .input('username', username)
-      .input('email', email)
-      .query('SELECT Id FROM Users WHERE Username = @username OR Email = @email');
+    // Check existing user - PostgreSQL menggunakan case-insensitive atau sesuaikan dengan nama kolom asli (di sini diasumsikan lowercase/camelCase sesuai standar pg)
+    // Catatan: Jika di PostgreSQL nama kolom Anda menggunakan huruf kapital, bungkus dengan tanda kutip ganda, misal: "Id", "Username"
+    const existing = await pool.query(
+      'SELECT "Id" FROM "Users" WHERE "Username" = $1 OR "Email" = $2',
+      [username, email]
+    );
 
-    if (existing.recordset.length > 0) {
+    if (existing.rows.length > 0) {
       res.status(409).json({ error: 'Username or email already exists' });
       return;
     }
 
     // Store password as plain text (school project)
-    await pool.request()
-      .input('name', name)
-      .input('username', username)
-      .input('email', email)
-      .input('password', password)
-      .query(`INSERT INTO Users (Name, Username, Email, Password, Role, Lives, TotalScore, LevelsPlayed, TotalStars, TotalTime)
-              VALUES (@name, @username, @email, @password, 'player', 3, 0, 0, 0, 0)`);
+    await pool.query(
+      `INSERT INTO "Users" ("Name", "Username", "Email", "Password", "Role", "Lives", "TotalScore", "LevelsPlayed", "TotalStars", "TotalTime")
+       VALUES ($1, $2, $3, $4, 'player', 3, 0, 0, 0, 0)`,
+      [name, username, email, password]
+    );
 
-    const user = await pool.request()
-      .input('username', username)
-      .query('SELECT Id, Name, Username, Email, Role, Lives, TotalScore, LevelsPlayed, TotalStars, TotalTime, CreatedAt FROM Users WHERE Username = @username');
+    const user = await pool.query(
+      'SELECT "Id", "Name", "Username", "Email", "Role", "Lives", "TotalScore", "LevelsPlayed", "TotalStars", "TotalTime", "CreatedAt" FROM "Users" WHERE "Username" = $1',
+      [username]
+    );
 
-    const u = user.recordset[0];
+    const u = user.rows[0];
     const token = jwt.sign({ id: u.Id, username: u.Username, role: u.Role }, JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({
@@ -77,16 +77,17 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
     }
 
     const pool = await getPool();
-    const result = await pool.request()
-      .input('username', username)
-      .query('SELECT Id, Name, Username, Email, Password, Role, Lives, TotalScore, LevelsPlayed, TotalStars, TotalTime, CreatedAt FROM Users WHERE Username = @username');
+    const result = await pool.query(
+      'SELECT "Id", "Name", "Username", "Email", "Password", "Role", "Lives", "TotalScore", "LevelsPlayed", "TotalStars", "TotalTime", "CreatedAt" FROM "Users" WHERE "Username" = $1',
+      [username]
+    );
 
-    if (result.recordset.length === 0) {
+    if (result.rows.length === 0) {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
-    const u = result.recordset[0];
+    const u = result.rows[0];
     const valid = password === u.Password;
     if (!valid) {
       res.status(401).json({ error: 'Invalid credentials' });
@@ -94,12 +95,13 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
     }
 
     // Load player progress
-    const progress = await pool.request()
-      .input('username', u.Username)
-      .query('SELECT LevelId, Stars, IsUnlocked, BestTime FROM PlayerProgress WHERE Username = @username');
+    const progress = await pool.query(
+      'SELECT "LevelId", "Stars", "IsUnlocked", "BestTime" FROM "PlayerProgress" WHERE "Username" = $1',
+      [u.Username]
+    );
 
     const levelProgress: Record<string, any> = {};
-    for (const p of progress.recordset) {
+    for (const p of progress.rows) {
       levelProgress[p.LevelId] = { stars: p.Stars, unlocked: !!p.IsUnlocked, timeUsed: p.BestTime };
     }
 
@@ -124,22 +126,24 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
 router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
-    const result = await pool.request()
-      .input('username', req.user!.username)
-      .query('SELECT Id, Name, Username, Email, Role, Lives, TotalScore, LevelsPlayed, TotalStars, TotalTime, CreatedAt FROM Users WHERE Username = @username');
+    const result = await pool.query(
+      'SELECT "Id", "Name", "Username", "Email", "Role", "Lives", "TotalScore", "LevelsPlayed", "TotalStars", "TotalTime", "CreatedAt" FROM "Users" WHERE "Username" = $1',
+      [req.user!.username]
+    );
 
-    if (result.recordset.length === 0) {
+    if (result.rows.length === 0) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const u = result.recordset[0];
-    const progress = await pool.request()
-      .input('username', u.Username)
-      .query('SELECT LevelId, Stars, IsUnlocked, BestTime FROM PlayerProgress WHERE Username = @username');
+    const u = result.rows[0];
+    const progress = await pool.query(
+      'SELECT "LevelId", "Stars", "IsUnlocked", "BestTime" FROM "PlayerProgress" WHERE "Username" = $1',
+      [u.Username]
+    );
 
     const levelProgress: Record<string, any> = {};
-    for (const p of progress.recordset) {
+    for (const p of progress.rows) {
       levelProgress[p.LevelId] = { stars: p.Stars, unlocked: !!p.IsUnlocked, timeUsed: p.BestTime };
     }
 

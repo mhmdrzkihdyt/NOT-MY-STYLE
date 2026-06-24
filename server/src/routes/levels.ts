@@ -9,36 +9,33 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
 
-    // FIX: Added missing .input('username') so the WHERE clause works correctly
-    const levelsResult = await pool.request()
-      .input('username', req.user!.username)
-      .query(`
-        SELECT l.Id, l.Title, l.Description, l.LevelType, l.Difficulty, l.Category,
-               l.Concept, l.HtmlStructure, l.TimeLimit, l.IsLocked, l.IsUserCreated,
-               l.CreatedBy, l.SortOrder
-        FROM Levels l
-        WHERE l.IsUserCreated = 0 OR l.CreatedBy = @username
-        ORDER BY l.SortOrder, l.Id
-      `);
+    // Menggunakan PostgreSQL parameter $1 untuk username
+    const levelsResult = await pool.query(`
+      SELECT l."Id", l."Title", l."Description", l."LevelType", l."Difficulty", l."Category",
+             l."Concept", l."HtmlStructure", l."TimeLimit", l."IsLocked", l."IsUserCreated",
+             l."CreatedBy", l."SortOrder"
+      FROM "Levels" l
+      WHERE l."IsUserCreated" = 0 OR l."CreatedBy" = $1
+      ORDER BY l."SortOrder", l."Id"
+    `, [req.user!.username]);
 
-    const levelIds = levelsResult.recordset.map((l: any) => l.Id);
+    const levelIds = levelsResult.rows.map((l: any) => l.Id);
     if (levelIds.length === 0) {
       res.json([]);
       return;
     }
 
-    // FIX: Removed duplicate/unused configsResult query; only one parameterized query is used
-    const configsRequest = pool.request();
-    levelIds.forEach((id: string, i: number) => configsRequest.input(`id${i}`, id));
-    const configs = await configsRequest.query(
-      `SELECT LevelId, PropertyName, InitialValue, TargetValue, SortOrder
-       FROM LevelPropertyConfigs WHERE LevelId IN (${levelIds.map((_: any, i: number) => `@id${i}`).join(',')})
-       ORDER BY SortOrder`
-    );
+    // Menggunakan fitur ANY($1) milik PostgreSQL untuk menggantikan klausa IN dinamis
+    const configs = await pool.query(`
+      SELECT "LevelId", "PropertyName", "InitialValue", "TargetValue", "SortOrder"
+      FROM "LevelPropertyConfigs" 
+      WHERE "LevelId" = ANY($1)
+      ORDER BY "SortOrder"
+    `, [levelIds]);
 
     // Group configs by level
     const configsByLevel: Record<string, any[]> = {};
-    for (const c of configs.recordset) {
+    for (const c of configs.rows) {
       if (!configsByLevel[c.LevelId]) configsByLevel[c.LevelId] = [];
       configsByLevel[c.LevelId].push({
         name: c.PropertyName,
@@ -48,7 +45,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response) => {
     }
 
     // Build level objects
-    const levels = levelsResult.recordset.map((l: any) => ({
+    const levels = levelsResult.rows.map((l: any) => ({
       id: l.Id,
       title: l.Title,
       description: l.Description,
@@ -84,8 +81,11 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
     const pool = await getPool();
 
     // Check if level already exists
-    const existing = await pool.request().input('id', id).query('SELECT Id FROM Levels WHERE Id = @id');
-    if (existing.recordset.length > 0) {
+    const existing = await pool.query(
+      'SELECT "Id" FROM "Levels" WHERE "Id" = $1', 
+      [id]
+    );
+    if (existing.rows.length > 0) {
       res.status(409).json({ error: 'Level already exists' });
       return;
     }
@@ -93,32 +93,32 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
     const isUserCreated = req.user!.role !== 'developer';
     const createdBy = isUserCreated ? req.user!.username : null;
 
-    await pool.request()
-      .input('id', id)
-      .input('title', title)
-      .input('description', description || '')
-      .input('levelType', levelType || (isUserCreated ? 'custom' : 'tantangan'))
-      .input('difficulty', difficulty || 'Sedang')
-      .input('category', category || null)
-      .input('concept', concept || null)
-      .input('htmlStructure', htmlStructure)
-      .input('timeLimit', timeLimit || 120)
-      .input('isUserCreated', isUserCreated ? 1 : 0)
-      .input('createdBy', createdBy)
-      .query(`INSERT INTO Levels (Id, Title, Description, LevelType, Difficulty, Category, Concept, HtmlStructure, TimeLimit, IsUserCreated, CreatedBy, IsLocked)
-              VALUES (@id, @title, @description, @levelType, @difficulty, @category, @concept, @htmlStructure, @timeLimit, @isUserCreated, @createdBy, 0)`);
+    // PostgreSQL menggunakan integer 1/0 untuk bit/boolean jika tipe kolomnya integer, 
+    // namun jika tipe kolom Anda di Postgres adalah BOOLEAN, ganti 1 menjadi true dan 0 menjadi false.
+    await pool.query(`
+      INSERT INTO "Levels" ("Id", "Title", "Description", "LevelType", "Difficulty", "Category", "Concept", "HtmlStructure", "TimeLimit", "IsUserCreated", "CreatedBy", "IsLocked")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0)
+    `, [
+      id, 
+      title, 
+      description || '', 
+      levelType || (isUserCreated ? 'custom' : 'tantangan'), 
+      difficulty || 'Sedang', 
+      category || null, 
+      concept || null, 
+      htmlStructure, 
+      timeLimit || 120, 
+      isUserCreated ? 1 : 0, 
+      createdBy
+    ]);
 
     // Insert property configs
     for (let i = 0; i < propertyConfigs.length; i++) {
       const pc = propertyConfigs[i];
-      await pool.request()
-        .input('levelId', id)
-        .input('propName', pc.name)
-        .input('initVal', pc.initialValue)
-        .input('targetVal', pc.targetValue)
-        .input('sortOrder', i)
-        .query(`INSERT INTO LevelPropertyConfigs (LevelId, PropertyName, InitialValue, TargetValue, SortOrder)
-                VALUES (@levelId, @propName, @initVal, @targetVal, @sortOrder)`);
+      await pool.query(`
+        INSERT INTO "LevelPropertyConfigs" ("LevelId", "PropertyName", "InitialValue", "TargetValue", "SortOrder")
+        VALUES ($1, $2, $3, $4, $5)
+      `, [id, pc.name, pc.initialValue, pc.targetValue, i]);
     }
 
     res.status(201).json({ id, title, message: 'Level created' });
@@ -132,9 +132,10 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response) => {
 router.delete('/:id', authenticate, requireDeveloper, async (req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
-    await pool.request()
-      .input('id', req.params.id)
-      .query('DELETE FROM Levels WHERE Id = @id');
+    await pool.query(
+      'DELETE FROM "Levels" WHERE "Id" = $1', 
+      [req.params.id]
+    );
     res.json({ message: 'Level deleted' });
   } catch (err: any) {
     console.error('[LEVELS] Delete error:', err.message);

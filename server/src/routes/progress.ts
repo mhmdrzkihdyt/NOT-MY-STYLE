@@ -8,12 +8,13 @@ const router = Router();
 router.get('/:username', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
-    const result = await pool.request()
-      .input('username', req.params.username)
-      .query('SELECT LevelId, Stars, IsUnlocked, BestTime, Score, HintsUsed, Attempts FROM PlayerProgress WHERE Username = @username');
+    const result = await pool.query(
+      'SELECT "LevelId", "Stars", "IsUnlocked", "BestTime", "Score", "HintsUsed", "Attempts" FROM "PlayerProgress" WHERE "Username" = $1',
+      [req.params.username]
+    );
 
     const progress: Record<string, any> = {};
-    for (const p of result.recordset) {
+    for (const p of result.rows) {
       progress[p.LevelId] = {
         stars: p.Stars,
         unlocked: !!p.IsUnlocked,
@@ -44,90 +45,79 @@ router.put('/:username', authenticate, async (req: AuthRequest, res: Response) =
     const pool = await getPool();
     const username = req.params.username;
 
-    // Check if progress exists for this level
-    const existing = await pool.request()
-      .input('username', username)
-      .input('levelId', levelId)
-      .query('SELECT Id, Stars, BestTime, Attempts FROM PlayerProgress WHERE Username = @username AND LevelId = @levelId');
+    // Cek apakah progress sudah ada
+    const existing = await pool.query(
+      'SELECT "Id", "Stars", "BestTime", "Attempts" FROM "PlayerProgress" WHERE "Username" = $1 AND "LevelId" = $2',
+      [username, levelId]
+    );
 
-    if (existing.recordset.length > 0) {
-      // Replay: update only if better
-      const old = existing.recordset[0];
+    if (existing.rows.length > 0) {
+      // Replay: update hanya jika skor/bintang lebih baik
+      const old = existing.rows[0];
       const newStars = Math.max(old.Stars || 0, stars || 0);
       const newBestTime = (timeUsed !== undefined && (old.BestTime === null || timeUsed < old.BestTime)) ? timeUsed : old.BestTime;
 
-      await pool.request()
-        .input('id', old.Id)
-        .input('stars', newStars)
-        .input('bestTime', newBestTime)
-        .input('score', score || 0)
-        .input('hintsUsed', hintsUsed || 0)
-        .input('attempts', (old.Attempts || 0) + 1)
-        .query(`UPDATE PlayerProgress SET Stars = @stars, BestTime = @bestTime, Score = @score,
-                HintsUsed = @hintsUsed, Attempts = @attempts, UpdatedAt = GETDATE() WHERE Id = @id`);
+      await pool.query(`
+        UPDATE "PlayerProgress" 
+        SET "Stars" = $1, "BestTime" = $2, "Score" = $3, "HintsUsed" = $4, "Attempts" = $5, "UpdatedAt" = NOW() 
+        WHERE "Id" = $6
+      `, [newStars, newBestTime, score || 0, hintsUsed || 0, (old.Attempts || 0) + 1, old.Id]);
 
-      // Update user totals only on first completion (Attempts was 0 before this update)
+      // Update total user jika ini penyelesaian pertama (Attempts sebelumnya kosong/0 pada logic logika Anda)
       if (old.Attempts === 0) {
-        await pool.request()
-          .input('username', username)
-          .input('score', score || 0)
-          .input('stars', stars || 0)
-          .input('timeUsed', timeUsed || 0)
-          .query(`UPDATE Users SET TotalScore = TotalScore + @score, LevelsPlayed = LevelsPlayed + 1,
-                  TotalStars = TotalStars + @stars, TotalTime = TotalTime + @timeUsed,
-                  UpdatedAt = GETDATE() WHERE Username = @username`);
+        await pool.query(`
+          UPDATE "Users" 
+          SET "TotalScore" = "TotalScore" + $1, "LevelsPlayed" = "LevelsPlayed" + 1,
+              "TotalStars" = "TotalStars" + $2, "TotalTime" = "TotalTime" + $3, "UpdatedAt" = NOW() 
+          WHERE "Username" = $4
+        `, [score || 0, stars || 0, timeUsed || 0, username]);
       } else if (timeUsed !== undefined && timeUsed < (old.BestTime || Infinity)) {
-        // Faster time on replay: adjust totalTime
+        // Jika replay lebih cepat: kurangi total waktu keseluruhan
         const diff = (old.BestTime || 0) - timeUsed;
-        await pool.request()
-          .input('username', username)
-          .input('diff', diff)
-          .query('UPDATE Users SET TotalTime = TotalTime - @diff, UpdatedAt = GETDATE() WHERE Username = @username');
+        await pool.query(
+          'UPDATE "Users" SET "TotalTime" = "TotalTime" - $1, "UpdatedAt" = NOW() WHERE "Username" = $2',
+          [diff, username]
+        );
       }
     } else {
-      // First completion — auto-ensure level exists in DB (levels may be hardcoded in frontend)
-      await pool.request()
-        .input('levelId', levelId)
-        .query(`IF NOT EXISTS (SELECT 1 FROM Levels WHERE Id = @levelId)
-                INSERT INTO Levels (Id, Title, Description, LevelType, Difficulty, HtmlStructure, TimeLimit, SortOrder)
-                VALUES (@levelId, @levelId, '', 'dasar', 'Mudah', '', 60, 0)`);
+      // Penyelesaian pertama: Pastikan level terdaftar (Upsert ala PostgreSQL menggunakan ON CONFLICT)
+      // Catatan: Ini membutuhkan constraint UNIQUE/PRIMARY KEY pada kolom Id di tabel Levels
+      await pool.query(`
+        INSERT INTO "Levels" ("Id", "Title", "Description", "LevelType", "Difficulty", "HtmlStructure", "TimeLimit", "SortOrder")
+        VALUES ($1, $1, '', 'dasar', 'Mudah', '', 60, 0)
+        ON CONFLICT ("Id") DO NOTHING
+      `, [levelId]);
 
-      await pool.request()
-        .input('username', username)
-        .input('levelId', levelId)
-        .input('stars', stars || 0)
-        .input('bestTime', timeUsed ?? null)
-        .input('score', score || 0)
-        .input('hintsUsed', hintsUsed || 0)
-        .query(`INSERT INTO PlayerProgress (Username, LevelId, Stars, IsUnlocked, BestTime, Score, HintsUsed, Attempts, CompletedAt)
-                VALUES (@username, @levelId, @stars, 1, @bestTime, @score, @hintsUsed, 1, GETDATE())`);
+      await pool.query(`
+        INSERT INTO "PlayerProgress" ("Username", "LevelId", "Stars", "IsUnlocked", "BestTime", "Score", "HintsUsed", "Attempts", "CompletedAt")
+        VALUES ($1, $2, $3, 1, $4, $5, $6, 1, NOW())
+      `, [username, levelId, stars || 0, timeUsed ?? null, score || 0, hintsUsed || 0]);
 
-      // Update user totals
-      await pool.request()
-        .input('username', username)
-        .input('score', score || 0)
-        .input('stars', stars || 0)
-        .input('timeUsed', timeUsed || 0)
-        .query(`UPDATE Users SET TotalScore = TotalScore + @score, LevelsPlayed = LevelsPlayed + 1,
-                TotalStars = TotalStars + @stars, TotalTime = TotalTime + @timeUsed,
-                UpdatedAt = GETDATE() WHERE Username = @username`);
+      // Update total data user
+      await pool.query(`
+        UPDATE "Users" 
+        SET "TotalScore" = "TotalScore" + $1, "LevelsPlayed" = "LevelsPlayed" + 1,
+            "TotalStars" = "TotalStars" + $2, "TotalTime" = "TotalTime" + $3, "UpdatedAt" = NOW() 
+        WHERE "Username" = $4
+      `, [score || 0, stars || 0, timeUsed || 0, username]);
     }
 
-    // Unlock next level if provided
+    // Unlock level berikutnya jika dilampirkan
     if (unlockNextLevelId) {
-      // Auto-ensure next level exists in DB too
-      await pool.request()
-        .input('levelId', unlockNextLevelId)
-        .query(`IF NOT EXISTS (SELECT 1 FROM Levels WHERE Id = @levelId)
-                INSERT INTO Levels (Id, Title, Description, LevelType, Difficulty, HtmlStructure, TimeLimit, SortOrder)
-                VALUES (@levelId, @levelId, '', 'dasar', 'Mudah', '', 60, 0)`);
+      // Pastikan level berikutnya ada di tabel Levels
+      await pool.query(`
+        INSERT INTO "Levels" ("Id", "Title", "Description", "LevelType", "Difficulty", "HtmlStructure", "TimeLimit", "SortOrder")
+        VALUES ($1, $1, '', 'dasar', 'Mudah', '', 60, 0)
+        ON CONFLICT ("Id") DO NOTHING
+      `, [unlockNextLevelId]);
 
-      await pool.request()
-        .input('username', username)
-        .input('levelId', unlockNextLevelId)
-        .query(`IF NOT EXISTS (SELECT 1 FROM PlayerProgress WHERE Username = @username AND LevelId = @levelId)
-                INSERT INTO PlayerProgress (Username, LevelId, IsUnlocked) VALUES (@username, @levelId, 1)
-                ELSE UPDATE PlayerProgress SET IsUnlocked = 1 WHERE Username = @username AND LevelId = @levelId`);
+      // Upsert status buka kunci level berikutnya (buka jika belum ada, update jika sudah ada)
+      // Catatan: Membutuhkan composite UNIQUE constraint pada (Username, LevelId) di tabel PlayerProgress
+      await pool.query(`
+        INSERT INTO "PlayerProgress" ("Username", "LevelId", "IsUnlocked") 
+        VALUES ($1, $2, 1)
+        ON CONFLICT ("Username", "LevelId") DO UPDATE SET "IsUnlocked" = 1
+      `, [username, unlockNextLevelId]);
     }
 
     res.json({ message: 'Progress updated' });
@@ -142,10 +132,10 @@ router.put('/:username/lives', authenticate, async (req: AuthRequest, res: Respo
   try {
     const { lives } = req.body;
     const pool = await getPool();
-    await pool.request()
-      .input('username', req.params.username)
-      .input('lives', Math.max(0, Math.min(3, lives)))
-      .query('UPDATE Users SET Lives = @lives, UpdatedAt = GETDATE() WHERE Username = @username');
+    await pool.query(
+      'UPDATE "Users" SET "Lives" = $1, "UpdatedAt" = NOW() WHERE "Username" = $2',
+      [Math.max(0, Math.min(3, lives)), req.params.username]
+    );
     res.json({ message: 'Lives updated' });
   } catch (err: any) {
     console.error('[PROGRESS] Lives error:', err.message);
