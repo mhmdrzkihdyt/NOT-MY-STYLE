@@ -1,14 +1,18 @@
-// Contoh pengisian di db.js menggunakan Pool pg
 import pg from 'pg';
 const { Pool } = pg;
 
+let pool: pg.Pool | null = null;
+
 export const getPool = async () => {
-  // Pastikan membaca 'DB_URL' sesuai yang ada di .env Anda
-  const pool = new Pool({
-    connectionString: process.env.DB_URL, 
-    ssl: {
-      rejectUnauthorized: false // Wajib diaktifkan untuk penyedia cloud seperti Supabase/Render
-    }
-  });
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DB_URL,
+      ssl: {
+        rejectUnauthorized: false, // wajib untuk Supabase/Render
+      },
+      max: 5, // batasi koneksi per instance serverless
+      idleTimeoutMillis: 30000,
+    });
+  }
   return pool;
 };
