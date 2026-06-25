@@ -9,13 +9,24 @@ router.get('/', authenticate, requireDeveloper, async (_req: AuthRequest, res: R
   try {
     const pool = await getPool();
     const result = await pool.query(`
-      SELECT "Id", "Name", "Username", "Email", "Password", "Role", "Lives", "TotalScore", "LevelsPlayed", "TotalStars", "TotalTime", "CreatedAt"
+      SELECT 
+        "Id"          AS "id",
+        "Name"        AS "name",
+        "Username"    AS "username",
+        "Email"       AS "email",
+        "Password"    AS "password",
+        "Role"        AS "role",
+        "Lives"       AS "lives",
+        "TotalScore"  AS "totalScore",
+        "LevelsPlayed" AS "levelsPlayed",
+        "TotalStars"  AS "stars",
+        "TotalTime"   AS "totalTime",
+        "CreatedAt"   AS "createdAt"
       FROM "Users"
       WHERE "Role" = 'player'
       ORDER BY "CreatedAt" DESC
     `);
     
-    // Menggunakan .rows untuk PostgreSQL
     res.json(result.rows);
   } catch (err: any) {
     console.error('[PLAYERS] List error:', err.message);

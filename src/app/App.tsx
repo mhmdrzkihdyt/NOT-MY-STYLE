@@ -334,31 +334,39 @@ export default function App() {
         setCurrentUser({ username: user.username, role: user.role as 'player' | 'developer' });
         setGlobalLives(user.lives);
         applyPlayerProgress(user.levelProgress);
-        // Restore revive countdown from localStorage if still active
+        // Recalculate stats dari PlayerProgress agar leaderboard akurat
+        if (user.role === 'player') {
+          api.recalculateStats(user.username).catch(() => {});
+        }
+        // Restore revive countdown — gunakan reviveEndAt dari DB sebagai sumber utama
         if (user.lives < 3) {
-          const savedEnd = localStorage.getItem('nms_revive_end');
-          const savedQueue = localStorage.getItem('nms_revive_queue');
           const livesNeeded = 3 - user.lives;
-          if (savedEnd) {
-            const endTime = parseInt(savedEnd, 10);
-            const remaining = Math.floor((endTime - Date.now()) / 1000);
-            if (remaining > 0) {
-              // Countdown masih valid — gunakan queue terbesar antara localStorage dan lives yang hilang
-              const queue = savedQueue ? Math.max(parseInt(savedQueue, 10), livesNeeded) : livesNeeded;
-              setReviveLivesQueue(queue);
-              setReviveCountdown(remaining);
-            } else {
-              // Countdown sudah kedaluwarsa — mulai baru untuk nyawa yang masih kurang
-              const endTime2 = Date.now() + 300_000;
-              localStorage.setItem('nms_revive_end', endTime2.toString());
-              localStorage.setItem('nms_revive_queue', livesNeeded.toString());
-              setReviveLivesQueue(livesNeeded);
-              setReviveCountdown(300);
-            }
+
+          // Prioritas 1: reviveEndAt dari database (persisten lintas tab/device)
+          // Prioritas 2: localStorage (fallback jika DB belum update)
+          const dbEndAt   = user.reviveEndAt;
+          const lsEndAt   = localStorage.getItem('nms_revive_end');
+          const lsQueue   = localStorage.getItem('nms_revive_queue');
+
+          // Pilih nilai terbesar (paling baru) antara DB dan localStorage
+          const bestEndAt = Math.max(
+            dbEndAt  ? Number(dbEndAt)  : 0,
+            lsEndAt  ? parseInt(lsEndAt, 10) : 0
+          );
+          const bestQueue = lsQueue ? Math.max(parseInt(lsQueue, 10), livesNeeded) : livesNeeded;
+
+          if (bestEndAt > Date.now()) {
+            // Countdown masih valid — lanjutkan dari sisa waktu
+            const remaining = Math.floor((bestEndAt - Date.now()) / 1000);
+            setReviveLivesQueue(bestQueue);
+            setReviveCountdown(remaining);
+            // Sinkronkan localStorage dengan nilai terbaru
+            localStorage.setItem('nms_revive_end', bestEndAt.toString());
+            localStorage.setItem('nms_revive_queue', bestQueue.toString());
           } else {
-            // Tidak ada countdown tersimpan — mulai baru
-            const endTime2 = Date.now() + 300_000;
-            localStorage.setItem('nms_revive_end', endTime2.toString());
+            // Countdown sudah kedaluwarsa atau belum ada — mulai baru
+            const newEndAt = Date.now() + 300_000;
+            localStorage.setItem('nms_revive_end', newEndAt.toString());
             localStorage.setItem('nms_revive_queue', livesNeeded.toString());
             setReviveLivesQueue(livesNeeded);
             setReviveCountdown(300);
@@ -429,9 +437,16 @@ export default function App() {
       setPlayers(prev => prev.map(p =>
         p.username === currentUser.username ? { ...p, lives: globalLives } : p
       ));
-      // Sync lives ke database setiap kali berubah (bukan hanya saat logout)
-      api.updateLives(currentUser.username, globalLives).catch(() => {});
+      // Hitung reviveEndAt dari countdown yang sedang berjalan
+      const reviveEndAt = (globalLives < 3 && reviveCountdown > 0)
+        ? Date.now() + reviveCountdown * 1000
+        : null;
+      // Sync lives + reviveEndAt ke database setiap kali berubah
+      api.updateLives(currentUser.username, globalLives, reviveEndAt).catch(() => {});
     }
+  // reviveCountdown sengaja tidak dimasukkan dependency agar tidak loop setiap detik
+  // hanya sync saat lives berubah atau user berganti
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [globalLives, currentUser]);
 
   // ─── PERSIST DATA ON BROWSER CLOSE / REFRESH ─────────────────────────────
@@ -439,22 +454,25 @@ export default function App() {
     const handleBeforeUnload = () => {
       if (!currentUser || !api.isLoggedIn()) return;
 
-      // Simpan revive countdown ke localStorage agar persisten
-      if (reviveCountdown > 0) {
-        const endTime = Date.now() + reviveCountdown * 1000;
-        localStorage.setItem('nms_revive_end', endTime.toString());
+      // Hitung reviveEndAt dari countdown yang sedang berjalan
+      const reviveEndAt = (globalLives < 3 && reviveCountdown > 0)
+        ? Date.now() + reviveCountdown * 1000
+        : null;
+
+      // Simpan ke localStorage sebagai backup
+      if (reviveEndAt) {
+        localStorage.setItem('nms_revive_end', reviveEndAt.toString());
         localStorage.setItem('nms_revive_queue', reviveLivesQueue.toString());
       }
 
-      // Hanya player yang perlu kirim progress; developer tidak punya progress level
+      // Hanya player yang perlu kirim progress
       if (currentUser.role === 'player') {
-        // Kumpulkan semua level yang sudah diselesaikan
         const completedProgress = levels
           .filter(l => l.stars !== undefined && !l.isUserCreated)
           .map(l => ({ levelId: l.id, stars: l.stars as number, timeUsed: undefined }));
 
-        // Kirim lives + progress sekaligus via sendBeacon (non-blocking saat unload)
-        api.bulkProgressBeacon(currentUser.username, globalLives, completedProgress);
+        // Kirim lives + reviveEndAt + progress sekaligus via sendBeacon
+        api.bulkProgressBeacon(currentUser.username, globalLives, reviveEndAt, completedProgress);
       }
     };
 
@@ -963,28 +981,28 @@ export default function App() {
   const handleLogout = async () => {
     // Kumpulkan semua progress level yang sudah diselesaikan dari state
     const completedProgress = levels.filter(l => l.stars !== undefined && !l.isUserCreated);
+    // Hitung reviveEndAt dari countdown yang sedang berjalan
+    const reviveEndAt = (globalLives < 3 && reviveCountdown > 0)
+      ? Date.now() + reviveCountdown * 1000
+      : null;
 
-    if (currentUser?.role === 'player' && completedProgress.length > 0) {
+    if (currentUser?.role === 'player') {
       try {
-        // Sync lives terlebih dahulu
-        await api.updateLives(currentUser.username, globalLives);
-        // Sync semua progress level yang sudah selesai ke database (fire and forget, jangan block logout)
-        const syncAll = completedProgress.map(l =>
-          api.updateProgress(currentUser.username, {
-            levelId: l.id,
-            stars: l.stars,
-            unlockNextLevelId: undefined,
-          }).catch(() => {})
-        );
-        // Tunggu maksimal 3 detik agar tidak terlalu lama
-        await Promise.race([
-          Promise.all(syncAll),
-          new Promise(resolve => setTimeout(resolve, 3000)),
-        ]);
-      } catch {}
-    } else if (currentUser?.role === 'player') {
-      try {
-        await api.updateLives(currentUser.username, globalLives);
+        // Sync lives + reviveEndAt ke database sebelum logout
+        await api.updateLives(currentUser.username, globalLives, reviveEndAt);
+        if (completedProgress.length > 0) {
+          const syncAll = completedProgress.map(l =>
+            api.updateProgress(currentUser.username, {
+              levelId: l.id,
+              stars: l.stars,
+              unlockNextLevelId: undefined,
+            }).catch(() => {})
+          );
+          await Promise.race([
+            Promise.all(syncAll),
+            new Promise(resolve => setTimeout(resolve, 3000)),
+          ]);
+        }
       } catch {}
     }
 
@@ -1068,6 +1086,35 @@ export default function App() {
       setCurrentUser({ username: res.user.username, role: res.user.role as 'player' | 'developer' });
       setGlobalLives(res.user.lives);
       applyPlayerProgress(res.user.levelProgress);
+      // Recalculate stats setelah login agar leaderboard akurat
+      if (res.user.role === 'player') {
+        api.recalculateStats(res.user.username).catch(() => {});
+        // Restore revive countdown jika lives < 3
+        if (res.user.lives < 3) {
+          const livesNeeded = 3 - res.user.lives;
+          const dbEndAt = res.user.reviveEndAt;
+          const lsEndAt = localStorage.getItem('nms_revive_end');
+          const lsQueue = localStorage.getItem('nms_revive_queue');
+          const bestEndAt = Math.max(
+            dbEndAt ? Number(dbEndAt) : 0,
+            lsEndAt ? parseInt(lsEndAt, 10) : 0
+          );
+          const bestQueue = lsQueue ? Math.max(parseInt(lsQueue, 10), livesNeeded) : livesNeeded;
+          if (bestEndAt > Date.now()) {
+            const remaining = Math.floor((bestEndAt - Date.now()) / 1000);
+            setReviveLivesQueue(bestQueue);
+            setReviveCountdown(remaining);
+            localStorage.setItem('nms_revive_end', bestEndAt.toString());
+            localStorage.setItem('nms_revive_queue', bestQueue.toString());
+          } else {
+            const newEndAt = Date.now() + 300_000;
+            localStorage.setItem('nms_revive_end', newEndAt.toString());
+            localStorage.setItem('nms_revive_queue', livesNeeded.toString());
+            setReviveLivesQueue(livesNeeded);
+            setReviveCountdown(300);
+          }
+        }
+      }
       setScreen(res.user.role === 'developer' ? 'developer' : 'player-gallery');
     } catch (err: any) {
       // Fallback: if backend is unavailable, use local auth

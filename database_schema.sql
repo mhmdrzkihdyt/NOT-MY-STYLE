@@ -33,6 +33,7 @@ CREATE TABLE "Users" (
     "TotalStars"      INT          NOT NULL DEFAULT 0,
     "TotalTime"       INT          NOT NULL DEFAULT 0,
     "LastReviveDate"  DATE,
+    "ReviveEndAt"     BIGINT,
     "CreatedAt"       DATE         NOT NULL DEFAULT CURRENT_DATE,
     "UpdatedAt"       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

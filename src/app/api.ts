@@ -72,6 +72,8 @@ export interface AuthUser {
   levelsPlayed: number;
   stars: number;
   totalTime: number;
+  // epoch ms kapan satu nyawa selesai dipulihkan; null jika nyawa penuh
+  reviveEndAt: number | null;
   levelProgress: Record<string, { stars?: number; unlocked: boolean; timeUsed?: number }>;
   createdAt: string;
 }
@@ -181,33 +183,41 @@ export async function updateProgress(username: string, data: {
   });
 }
 
-export async function updateLives(username: string, lives: number): Promise<void> {
+export async function updateLives(username: string, lives: number, reviveEndAt?: number | null): Promise<void> {
   await request(`/progress/${username}/lives`, {
     method: 'PUT',
-    body: JSON.stringify({ lives }),
+    body: JSON.stringify({ lives, reviveEndAt: reviveEndAt ?? null }),
   });
 }
 
-// Kirim lives via sendBeacon saat browser ditutup/refresh (token dikirim di body)
-export function updateLivesBeacon(username: string, lives: number): void {
+export async function recalculateStats(username: string): Promise<void> {
+  await request(`/progress/${username}/recalculate`, { method: 'POST' });
+}
+
+// Kirim lives+reviveEndAt via sendBeacon saat browser ditutup/refresh
+export function updateLivesBeacon(username: string, lives: number, reviveEndAt?: number | null): void {
   const token = getToken();
   if (!token) return;
   const endpoint = `${API_BASE}/progress/${username}/lives-beacon`;
-  const blob = new Blob([JSON.stringify({ lives, token })], { type: 'application/json' });
+  const blob = new Blob(
+    [JSON.stringify({ lives, reviveEndAt: reviveEndAt ?? null, token })],
+    { type: 'application/json' }
+  );
   navigator.sendBeacon(endpoint, blob);
 }
 
-// Kirim lives + progress via sendBeacon saat browser ditutup/refresh
+// Kirim lives + reviveEndAt + progress via sendBeacon saat browser ditutup/refresh
 export function bulkProgressBeacon(
   username: string,
   lives: number,
+  reviveEndAt: number | null,
   progress: { levelId: string; stars: number; timeUsed?: number }[]
 ): void {
   const token = getToken();
   if (!token) return;
   const endpoint = `${API_BASE}/progress/${username}/bulk-beacon`;
   const blob = new Blob(
-    [JSON.stringify({ lives, progress, token })],
+    [JSON.stringify({ lives, reviveEndAt, progress, token })],
     { type: 'application/json' }
   );
   navigator.sendBeacon(endpoint, blob);
