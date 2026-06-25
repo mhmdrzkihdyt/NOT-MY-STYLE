@@ -307,69 +307,66 @@ export default function App() {
 
   // ─── LOAD DEV LEADERBOARD WHEN OVERVIEW TAB ─────────────────────────────
   useEffect(() => {
-    if (devTab !== 'overview' || currentUser?.role !== 'developer') return;
-
-    const loadDevLeaderboard = async () => {
+    if (devTab === 'overview' && currentUser?.role === 'developer') {
       setDevLeaderboardLoading(true);
-      try {
-        // Recalculate stats semua player dulu agar data akurat
-        await api.recalculateAllStats();
-      } catch {}
-      try {
-        const data = await api.getLeaderboard();
-        setDevLeaderboard(data);
-        localStorage.setItem('nms_dev_leaderboard', JSON.stringify(data));
-      } catch (err: any) {
-        console.error('[API] Failed to load dev leaderboard:', err.message);
-        const cached = localStorage.getItem('nms_dev_leaderboard');
-        if (cached) {
-          try { setDevLeaderboard(JSON.parse(cached)); } catch {}
-        }
-      } finally {
-        setDevLeaderboardLoading(false);
-      }
-    };
+      // Hapus cache lama agar selalu ambil data terbaru dari server
+      localStorage.removeItem('nms_dev_leaderboard');
+      api.getLeaderboard()
+        .then(data => {
+          setDevLeaderboard(data);
+          setDevLeaderboardLoading(false);
+        })
+        .catch(err => {
+          console.error('[API] Failed to load dev leaderboard:', err.message);
+          setDevLeaderboardLoading(false);
+        });
+    }
+  }, [devTab, currentUser, screen]);
 
-    loadDevLeaderboard();
-  }, [devTab, currentUser]);
-
-  // ─── AUTO-LOGIN ON APP LOAD ───────────────────────────────────────────────
   // ─── AUTO-LOGIN ON APP LOAD ───────────────────────────────────────────────
   useEffect(() => {
-    if (!api.isLoggedIn()) return;
-
-    const init = async () => {
-      try {
-        const user = await api.getMe();
-
+    if (api.isLoggedIn()) {
+      api.getMe().then(user => {
         setCurrentUser({ username: user.username, role: user.role as 'player' | 'developer' });
         setGlobalLives(user.lives);
         applyPlayerProgress(user.levelProgress);
-
-        // Recalculate stats SEBELUM setScreen agar leaderboard & overview langsung akurat
+        // Recalculate stats dari PlayerProgress agar leaderboard akurat
         if (user.role === 'player') {
-          try { await api.recalculateStats(user.username); } catch {}
+          // Await recalculate agar leaderboard selalu menampilkan data terbaru setelah refresh
+          api.recalculateStats(user.username)
+            .catch(() => {})
+            .finally(() => {
+              // Setelah stats ter-update, clear cache leaderboard agar fresh saat dibuka
+              localStorage.removeItem('nms_dev_leaderboard');
+            });
         }
-
-        // Restore revive countdown — prioritas: DB > localStorage
+        // Restore revive countdown — gunakan reviveEndAt dari DB sebagai sumber utama
         if (user.lives < 3) {
           const livesNeeded = 3 - user.lives;
-          const dbEndAt  = user.reviveEndAt;
-          const lsEndAt  = localStorage.getItem('nms_revive_end');
-          const lsQueue  = localStorage.getItem('nms_revive_queue');
+
+          // Prioritas 1: reviveEndAt dari database (persisten lintas tab/device)
+          // Prioritas 2: localStorage (fallback jika DB belum update)
+          const dbEndAt   = user.reviveEndAt;
+          const lsEndAt   = localStorage.getItem('nms_revive_end');
+          const lsQueue   = localStorage.getItem('nms_revive_queue');
+
+          // Pilih nilai terbesar (paling baru) antara DB dan localStorage
           const bestEndAt = Math.max(
-            dbEndAt ? Number(dbEndAt) : 0,
-            lsEndAt ? parseInt(lsEndAt, 10) : 0
+            dbEndAt  ? Number(dbEndAt)  : 0,
+            lsEndAt  ? parseInt(lsEndAt, 10) : 0
           );
           const bestQueue = lsQueue ? Math.max(parseInt(lsQueue, 10), livesNeeded) : livesNeeded;
 
           if (bestEndAt > Date.now()) {
+            // Countdown masih valid — lanjutkan dari sisa waktu
             const remaining = Math.floor((bestEndAt - Date.now()) / 1000);
             setReviveLivesQueue(bestQueue);
             setReviveCountdown(remaining);
+            // Sinkronkan localStorage dengan nilai terbaru
             localStorage.setItem('nms_revive_end', bestEndAt.toString());
             localStorage.setItem('nms_revive_queue', bestQueue.toString());
           } else {
+            // Countdown sudah kedaluwarsa atau belum ada — mulai baru
             const newEndAt = Date.now() + 300_000;
             localStorage.setItem('nms_revive_end', newEndAt.toString());
             localStorage.setItem('nms_revive_queue', livesNeeded.toString());
@@ -377,10 +374,9 @@ export default function App() {
             setReviveCountdown(300);
           }
         }
-
         setScreen(user.role === 'developer' ? 'developer' : 'player-gallery');
-      } catch {
-        // Fallback: gunakan data dari localStorage
+      }).catch(() => {
+        // Fallback: try to restore from localStorage
         const savedProgress = localStorage.getItem('nms_level_progress');
         if (savedProgress) {
           try { applyPlayerProgress(JSON.parse(savedProgress)); } catch {}
@@ -389,27 +385,28 @@ export default function App() {
         if (savedUser) {
           setCurrentUser({ username: savedUser.username, role: savedUser.role as 'player' | 'developer' });
           setGlobalLives(savedUser.lives);
+          // Restore countdown
           if (savedUser.lives < 3) {
-            const livesNeeded = 3 - (savedUser.lives ?? 3);
-            const savedEnd   = localStorage.getItem('nms_revive_end');
+            const savedEnd = localStorage.getItem('nms_revive_end');
             const savedQueue = localStorage.getItem('nms_revive_queue');
+            const livesNeeded = 3 - (savedUser.lives ?? 3);
             if (savedEnd) {
-              const endTime   = parseInt(savedEnd, 10);
+              const endTime = parseInt(savedEnd, 10);
               const remaining = Math.floor((endTime - Date.now()) / 1000);
               if (remaining > 0) {
                 const queue = savedQueue ? Math.max(parseInt(savedQueue, 10), livesNeeded) : livesNeeded;
                 setReviveLivesQueue(queue);
                 setReviveCountdown(remaining);
               } else {
-                const newEnd = Date.now() + 300_000;
-                localStorage.setItem('nms_revive_end', newEnd.toString());
+                const endTime2 = Date.now() + 300_000;
+                localStorage.setItem('nms_revive_end', endTime2.toString());
                 localStorage.setItem('nms_revive_queue', livesNeeded.toString());
                 setReviveLivesQueue(livesNeeded);
                 setReviveCountdown(300);
               }
             } else {
-              const newEnd = Date.now() + 300_000;
-              localStorage.setItem('nms_revive_end', newEnd.toString());
+              const endTime2 = Date.now() + 300_000;
+              localStorage.setItem('nms_revive_end', endTime2.toString());
               localStorage.setItem('nms_revive_queue', livesNeeded.toString());
               setReviveLivesQueue(livesNeeded);
               setReviveCountdown(300);
@@ -419,11 +416,11 @@ export default function App() {
         } else {
           api.logout();
         }
-      }
-    };
+      });
+    }
+  }, []);
 
-    init();
-  }, []);  // ─── SAVE LEVEL PROGRESS TO LOCALSTORAGE ─────────────────────────────────
+  // ─── SAVE LEVEL PROGRESS TO LOCALSTORAGE ─────────────────────────────────
   useEffect(() => {
     const progress: Record<string, LevelProgress> = {};
     levels.forEach(l => {
@@ -1091,9 +1088,9 @@ export default function App() {
       setCurrentUser({ username: res.user.username, role: res.user.role as 'player' | 'developer' });
       setGlobalLives(res.user.lives);
       applyPlayerProgress(res.user.levelProgress);
-      // Recalculate stats SEBELUM setScreen agar leaderboard langsung akurat
+      // Recalculate stats setelah login agar leaderboard akurat
       if (res.user.role === 'player') {
-        try { await api.recalculateStats(res.user.username); } catch {}
+        api.recalculateStats(res.user.username).catch(() => {});
         // Restore revive countdown jika lives < 3
         if (res.user.lives < 3) {
           const livesNeeded = 3 - res.user.lives;
@@ -1949,7 +1946,8 @@ export default function App() {
               setShowLeaderboardModal(true);
               setLeaderboardData([]);
               setLeaderboardLoading(true);
-              api.getLeaderboard()
+              // Recalculate dulu agar data selalu fresh, lalu fetch leaderboard
+              const fetchLeaderboard = () => api.getLeaderboard()
                 .then(data => { setLeaderboardData(data); setLeaderboardLoading(false); })
                 .catch(() => {
                   // Fallback: build leaderboard from local players state
@@ -1974,6 +1972,14 @@ export default function App() {
                   setLeaderboardData(localLb);
                   setLeaderboardLoading(false);
                 });
+              // Recalculate stats dulu agar data leaderboard selalu akurat, lalu fetch
+              if (currentUser) {
+                api.recalculateStats(currentUser.username)
+                  .catch(() => {})
+                  .finally(() => fetchLeaderboard());
+              } else {
+                fetchLeaderboard();
+              }
             }}
               className="flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all hover:scale-105"
               style={{ background: '#1E1E2E', border: '1px solid #FFD93D44' }}>

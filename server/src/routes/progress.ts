@@ -43,14 +43,16 @@ router.put('/:username', authenticate, async (req: AuthRequest, res: Response) =
     const username = req.params.username;
 
     const existing = await pool.query(
-      `SELECT "Id" AS "id", "Stars" AS "stars", "BestTime" AS "bestTime", "Attempts" AS "attempts"
+      `SELECT "Id" AS "id", "Stars" AS "stars", "Score" AS "score",
+              "BestTime" AS "bestTime", "Attempts" AS "attempts"
        FROM "PlayerProgress" WHERE "Username" = $1 AND "LevelId" = $2`,
       [username, levelId]
     );
 
     if (existing.rows.length > 0) {
       const old = existing.rows[0];
-      const newStars = Math.max(old.stars || 0, stars || 0);
+      const newStars    = Math.max(old.stars    || 0, stars    || 0);
+      const newScore    = Math.max(old.score    || 0, score    || 0);
       const newBestTime = (timeUsed !== undefined && (old.bestTime === null || timeUsed < old.bestTime))
         ? timeUsed : old.bestTime;
 
@@ -58,10 +60,11 @@ router.put('/:username', authenticate, async (req: AuthRequest, res: Response) =
         `UPDATE "PlayerProgress"
          SET "Stars"=$1,"BestTime"=$2,"Score"=$3,"HintsUsed"=$4,"Attempts"=$5,"UpdatedAt"=NOW()
          WHERE "Id"=$6`,
-        [newStars, newBestTime, score || 0, hintsUsed || 0, (old.attempts || 0) + 1, old.id]
+        [newStars, newBestTime, newScore, hintsUsed || 0, (old.attempts || 0) + 1, old.id]
       );
 
       if (!old.attempts || old.attempts === 0) {
+        // Penyelesaian pertama — tambah semua stats
         await pool.query(
           `UPDATE "Users"
            SET "TotalScore"="TotalScore"+$1,"LevelsPlayed"="LevelsPlayed"+1,
@@ -69,12 +72,24 @@ router.put('/:username', authenticate, async (req: AuthRequest, res: Response) =
            WHERE "Username"=$4`,
           [score || 0, stars || 0, timeUsed || 0, username]
         );
-      } else if (timeUsed !== undefined && timeUsed < (old.bestTime || Infinity)) {
-        const diff = (old.bestTime || 0) - timeUsed;
-        await pool.query(
-          'UPDATE "Users" SET "TotalTime"="TotalTime"-$1,"UpdatedAt"=NOW() WHERE "Username"=$2',
-          [diff, username]
-        );
+      } else {
+        // Replay — update TotalScore dan TotalStars jika lebih baik, TotalTime jika lebih cepat
+        const scoreDiff = newScore - (old.score || 0);
+        const starsDiff = newStars - (old.stars || 0);
+        if (scoreDiff !== 0 || starsDiff !== 0 || (timeUsed !== undefined && timeUsed < (old.bestTime || Infinity))) {
+          const timeDiff = (timeUsed !== undefined && timeUsed < (old.bestTime || Infinity))
+            ? (old.bestTime || 0) - timeUsed
+            : 0;
+          await pool.query(
+            `UPDATE "Users"
+             SET "TotalScore"="TotalScore"+$1,
+                 "TotalStars"="TotalStars"+$2,
+                 "TotalTime"="TotalTime"-$3,
+                 "UpdatedAt"=NOW()
+             WHERE "Username"=$4`,
+            [scoreDiff, starsDiff, timeDiff, username]
+          );
+        }
       }
     } else {
       await pool.query(

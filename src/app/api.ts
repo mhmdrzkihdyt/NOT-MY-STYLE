@@ -239,10 +239,6 @@ export async function getLeaderboard(): Promise<LeaderboardEntry[]> {
   return request<LeaderboardEntry[]>('/leaderboard');
 }
 
-export async function recalculateAllStats(): Promise<void> {
-  await request('/leaderboard/recalculate-all', { method: 'POST' });
-}
-
 // ─── PLAYERS (Developer only) ──────────────────────────────────────────────
 
 export interface PlayerData {
