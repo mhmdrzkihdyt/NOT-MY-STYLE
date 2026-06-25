@@ -10,15 +10,11 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
 
-    // Count total dasar levels to determine "all completed" threshold
     const dasarCountResult = await pool.query(
       'SELECT COUNT(*) AS "total" FROM "Levels" WHERE "LevelType" = \'dasar\''
     );
-    
-    // Di PostgreSQL, hasil COUNT(*) biasanya bertipe string (BigInt), jadi kita parsing ke integer
     const totalDasar: number = parseInt(dasarCountResult.rows[0]?.total ?? '0', 10);
 
-    // Eksekusi query dengan format PostgreSQL ($1 untuk parameter) dan properti .rows
     const result = await pool.query(`
       SELECT
         u."Username"     AS "username",
@@ -38,7 +34,6 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
       ORDER BY "rank"
     `, [totalDasar]);
 
-    // Memetakan properti dari result.rows — semua sudah camelCase dari alias
     const leaderboard = result.rows.map((p: any, idx: number) => ({
       rank: Number(p.rank) || (idx + 1),
       username: p.username,
@@ -56,15 +51,12 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
   }
 });
 
-export default router;
-
 // POST /api/leaderboard/recalculate-all - Recalculate stats semua player dari PlayerProgress
-// Dipanggil oleh developer saat load overview agar data leaderboard selalu akurat
+// Dipanggil developer saat load overview agar data selalu akurat
 router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
 
-    // Ambil semua username player
     const players = await pool.query(
       'SELECT "Username" AS "username" FROM "Users" WHERE "Role" = \'player\''
     );
@@ -75,7 +67,7 @@ router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Res
 
       const agg = await pool.query(
         `SELECT
-           COUNT(*)          FILTER (WHERE "Stars" IS NOT NULL AND "Attempts" > 0) AS "levelsPlayed",
+           COUNT(*)           FILTER (WHERE "Stars" IS NOT NULL AND "Attempts" > 0) AS "levelsPlayed",
            COALESCE(SUM("Stars")    FILTER (WHERE "Stars"    IS NOT NULL AND "Attempts" > 0), 0) AS "totalStars",
            COALESCE(SUM("Score")    FILTER (WHERE "Score"    IS NOT NULL AND "Attempts" > 0), 0) AS "totalScore",
            COALESCE(SUM("BestTime") FILTER (WHERE "BestTime" IS NOT NULL AND "Attempts" > 0), 0) AS "totalTime"
@@ -86,13 +78,13 @@ router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Res
       const a = agg.rows[0];
       await pool.query(
         `UPDATE "Users"
-         SET "TotalScore"=$1,"LevelsPlayed"=$2,"TotalStars"=$3,"TotalTime"=$4,"UpdatedAt"=NOW()
+         SET "TotalScore"=$1, "LevelsPlayed"=$2, "TotalStars"=$3, "TotalTime"=$4, "UpdatedAt"=NOW()
          WHERE "Username"=$5`,
         [
-          Number(a.totalScore) || 0,
+          Number(a.totalScore)   || 0,
           Number(a.levelsPlayed) || 0,
-          Number(a.totalStars) || 0,
-          Number(a.totalTime) || 0,
+          Number(a.totalStars)   || 0,
+          Number(a.totalTime)    || 0,
           username,
         ]
       );
@@ -104,3 +96,5 @@ router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Res
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+export default router;
