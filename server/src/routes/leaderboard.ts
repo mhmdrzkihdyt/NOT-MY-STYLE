@@ -17,17 +17,17 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
 
     const result = await pool.query(`
       SELECT
-        u."Username"     AS "username",
-        u."Name"         AS "name",
-        u."TotalScore"   AS "totalScore",
-        u."LevelsPlayed" AS "levelsPlayed",
-        u."TotalStars"   AS "stars",
-        u."TotalTime"    AS "totalTime",
+        u."Username"      AS "username",
+        u."Name"          AS "name",
+        u."TotalScore"    AS "totalScore",
+        u."LevelsPlayed"  AS "levelsPlayed",
+        u."TotalStars"    AS "stars",
+        u."TotalTime"     AS "totalTime",
         RANK() OVER (
           ORDER BY
             CASE WHEN u."LevelsPlayed" >= $1 THEN 0 ELSE 1 END ASC,
-            u."TotalScore" DESC,
-            u."TotalTime" ASC
+            u."TotalScore"  DESC,
+            u."TotalTime"   ASC
         ) AS "rank"
       FROM "Users" u
       WHERE u."Role" = 'player'
@@ -35,13 +35,13 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
     `, [totalDasar]);
 
     const leaderboard = result.rows.map((p: any, idx: number) => ({
-      rank: Number(p.rank) || (idx + 1),
-      username: p.username,
-      name: p.name,
-      totalScore: Number(p.totalScore) || 0,
+      rank:         Number(p.rank)         || (idx + 1),
+      username:     p.username,
+      name:         p.name,
+      totalScore:   Number(p.totalScore)   || 0,
       levelsPlayed: Number(p.levelsPlayed) || 0,
-      stars: Number(p.stars) || 0,
-      totalTime: Number(p.totalTime) || 0,
+      stars:        Number(p.stars)        || 0,
+      totalTime:    Number(p.totalTime)    || 0,
     }));
 
     res.json(leaderboard);
@@ -51,35 +51,41 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
   }
 });
 
-// POST /api/leaderboard/recalculate-all - Recalculate stats semua player dari PlayerProgress
-// Dipanggil developer saat load overview agar data selalu akurat
+// POST /api/leaderboard/recalculate-all
+// Recalculate TotalScore/LevelsPlayed/TotalStars/TotalTime semua player dari PlayerProgress.
+// Dipanggil oleh developer dashboard sebelum load leaderboard agar data selalu akurat.
 router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Response) => {
   try {
     const pool = await getPool();
 
-    const players = await pool.query(
+    const playersResult = await pool.query(
       'SELECT "Username" AS "username" FROM "Users" WHERE "Role" = \'player\''
     );
 
-    for (const row of players.rows) {
+    for (const row of playersResult.rows) {
       const username = row.username;
       if (!username) continue;
 
       const agg = await pool.query(
         `SELECT
-           COUNT(*)           FILTER (WHERE "Stars" IS NOT NULL AND "Attempts" > 0) AS "levelsPlayed",
-           COALESCE(SUM("Stars")    FILTER (WHERE "Stars"    IS NOT NULL AND "Attempts" > 0), 0) AS "totalStars",
-           COALESCE(SUM("Score")    FILTER (WHERE "Score"    IS NOT NULL AND "Attempts" > 0), 0) AS "totalScore",
-           COALESCE(SUM("BestTime") FILTER (WHERE "BestTime" IS NOT NULL AND "Attempts" > 0), 0) AS "totalTime"
-         FROM "PlayerProgress" WHERE "Username" = $1`,
+           COUNT(*)                                                                     AS "levelsPlayed",
+           COALESCE(SUM("Stars")    FILTER (WHERE "Stars"    IS NOT NULL), 0)           AS "totalStars",
+           COALESCE(SUM("Score")    FILTER (WHERE "Score"    IS NOT NULL), 0)           AS "totalScore",
+           COALESCE(SUM("BestTime") FILTER (WHERE "BestTime" IS NOT NULL), 0)           AS "totalTime"
+         FROM "PlayerProgress"
+         WHERE "Username" = $1 AND "Stars" IS NOT NULL AND "Attempts" > 0`,
         [username]
       );
 
       const a = agg.rows[0];
       await pool.query(
         `UPDATE "Users"
-         SET "TotalScore"=$1, "LevelsPlayed"=$2, "TotalStars"=$3, "TotalTime"=$4, "UpdatedAt"=NOW()
-         WHERE "Username"=$5`,
+         SET "TotalScore"   = $1,
+             "LevelsPlayed" = $2,
+             "TotalStars"   = $3,
+             "TotalTime"    = $4,
+             "UpdatedAt"    = NOW()
+         WHERE "Username"   = $5`,
         [
           Number(a.totalScore)   || 0,
           Number(a.levelsPlayed) || 0,
@@ -90,7 +96,7 @@ router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Res
       );
     }
 
-    res.json({ message: 'All players recalculated', count: players.rows.length });
+    res.json({ message: 'All players recalculated', count: playersResult.rows.length });
   } catch (err: any) {
     console.error('[LEADERBOARD] Recalculate-all error:', err.message);
     res.status(500).json({ error: 'Server error' });
