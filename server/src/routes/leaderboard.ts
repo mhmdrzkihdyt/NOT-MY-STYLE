@@ -12,7 +12,7 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
 
     // Count total dasar levels to determine "all completed" threshold
     const dasarCountResult = await pool.query(
-      'SELECT COUNT(*) AS total FROM "Levels" WHERE "LevelType" = \'dasar\''
+      'SELECT COUNT(*) AS "total" FROM "Levels" WHERE "LevelType" = \'dasar\''
     );
     
     // Di PostgreSQL, hasil COUNT(*) biasanya bertipe string (BigInt), jadi kita parsing ke integer
@@ -21,33 +21,32 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
     // Eksekusi query dengan format PostgreSQL ($1 untuk parameter) dan properti .rows
     const result = await pool.query(`
       SELECT
-        u."Username",
-        u."Name",
-        u."TotalScore",
-        u."LevelsPlayed",
-        u."TotalStars",
-        u."TotalTime",
-        CASE WHEN u."LevelsPlayed" >= $1 THEN 0 ELSE 1 END AS "AllDasarBonus",
+        u."Username"     AS "username",
+        u."Name"         AS "name",
+        u."TotalScore"   AS "totalScore",
+        u."LevelsPlayed" AS "levelsPlayed",
+        u."TotalStars"   AS "stars",
+        u."TotalTime"    AS "totalTime",
         RANK() OVER (
           ORDER BY
             CASE WHEN u."LevelsPlayed" >= $1 THEN 0 ELSE 1 END ASC,
             u."TotalScore" DESC,
             u."TotalTime" ASC
-        ) AS "Rank"
+        ) AS "rank"
       FROM "Users" u
       WHERE u."Role" = 'player'
-      ORDER BY "Rank"
+      ORDER BY "rank"
     `, [totalDasar]);
 
-    // Memetakan properti dari result.rows
-    const leaderboard = result.rows.map((p: any) => ({
-      rank: Number(p.Rank),
-      username: p.Username,
-      name: p.Name,
-      totalScore: p.TotalScore,
-      levelsPlayed: p.LevelsPlayed,
-      stars: p.TotalStars,
-      totalTime: p.TotalTime,
+    // Memetakan properti dari result.rows — semua sudah camelCase dari alias
+    const leaderboard = result.rows.map((p: any, idx: number) => ({
+      rank: Number(p.rank) || (idx + 1),
+      username: p.username,
+      name: p.name,
+      totalScore: Number(p.totalScore) || 0,
+      levelsPlayed: Number(p.levelsPlayed) || 0,
+      stars: Number(p.stars) || 0,
+      totalTime: Number(p.totalTime) || 0,
     }));
 
     res.json(leaderboard);

@@ -188,6 +188,31 @@ export async function updateLives(username: string, lives: number): Promise<void
   });
 }
 
+// Kirim lives via sendBeacon saat browser ditutup/refresh (token dikirim di body)
+export function updateLivesBeacon(username: string, lives: number): void {
+  const token = getToken();
+  if (!token) return;
+  const endpoint = `${API_BASE}/progress/${username}/lives-beacon`;
+  const blob = new Blob([JSON.stringify({ lives, token })], { type: 'application/json' });
+  navigator.sendBeacon(endpoint, blob);
+}
+
+// Kirim lives + progress via sendBeacon saat browser ditutup/refresh
+export function bulkProgressBeacon(
+  username: string,
+  lives: number,
+  progress: { levelId: string; stars: number; timeUsed?: number }[]
+): void {
+  const token = getToken();
+  if (!token) return;
+  const endpoint = `${API_BASE}/progress/${username}/bulk-beacon`;
+  const blob = new Blob(
+    [JSON.stringify({ lives, progress, token })],
+    { type: 'application/json' }
+  );
+  navigator.sendBeacon(endpoint, blob);
+}
+
 // ─── LEADERBOARD ────────────────────────────────────────────────────────────
 
 export interface LeaderboardEntry {

@@ -338,14 +338,30 @@ export default function App() {
         if (user.lives < 3) {
           const savedEnd = localStorage.getItem('nms_revive_end');
           const savedQueue = localStorage.getItem('nms_revive_queue');
-          if (savedEnd && savedQueue) {
+          const livesNeeded = 3 - user.lives;
+          if (savedEnd) {
             const endTime = parseInt(savedEnd, 10);
-            const queue = parseInt(savedQueue, 10);
             const remaining = Math.floor((endTime - Date.now()) / 1000);
-            if (remaining > 0 && queue > 0) {
+            if (remaining > 0) {
+              // Countdown masih valid — gunakan queue terbesar antara localStorage dan lives yang hilang
+              const queue = savedQueue ? Math.max(parseInt(savedQueue, 10), livesNeeded) : livesNeeded;
               setReviveLivesQueue(queue);
               setReviveCountdown(remaining);
+            } else {
+              // Countdown sudah kedaluwarsa — mulai baru untuk nyawa yang masih kurang
+              const endTime2 = Date.now() + 300_000;
+              localStorage.setItem('nms_revive_end', endTime2.toString());
+              localStorage.setItem('nms_revive_queue', livesNeeded.toString());
+              setReviveLivesQueue(livesNeeded);
+              setReviveCountdown(300);
             }
+          } else {
+            // Tidak ada countdown tersimpan — mulai baru
+            const endTime2 = Date.now() + 300_000;
+            localStorage.setItem('nms_revive_end', endTime2.toString());
+            localStorage.setItem('nms_revive_queue', livesNeeded.toString());
+            setReviveLivesQueue(livesNeeded);
+            setReviveCountdown(300);
           }
         }
         setScreen(user.role === 'developer' ? 'developer' : 'player-gallery');
@@ -363,14 +379,27 @@ export default function App() {
           if (savedUser.lives < 3) {
             const savedEnd = localStorage.getItem('nms_revive_end');
             const savedQueue = localStorage.getItem('nms_revive_queue');
-            if (savedEnd && savedQueue) {
+            const livesNeeded = 3 - (savedUser.lives ?? 3);
+            if (savedEnd) {
               const endTime = parseInt(savedEnd, 10);
-              const queue = parseInt(savedQueue, 10);
               const remaining = Math.floor((endTime - Date.now()) / 1000);
-              if (remaining > 0 && queue > 0) {
+              if (remaining > 0) {
+                const queue = savedQueue ? Math.max(parseInt(savedQueue, 10), livesNeeded) : livesNeeded;
                 setReviveLivesQueue(queue);
                 setReviveCountdown(remaining);
+              } else {
+                const endTime2 = Date.now() + 300_000;
+                localStorage.setItem('nms_revive_end', endTime2.toString());
+                localStorage.setItem('nms_revive_queue', livesNeeded.toString());
+                setReviveLivesQueue(livesNeeded);
+                setReviveCountdown(300);
               }
+            } else {
+              const endTime2 = Date.now() + 300_000;
+              localStorage.setItem('nms_revive_end', endTime2.toString());
+              localStorage.setItem('nms_revive_queue', livesNeeded.toString());
+              setReviveLivesQueue(livesNeeded);
+              setReviveCountdown(300);
             }
           }
           setScreen(savedUser.role === 'developer' ? 'developer' : 'player-gallery');
@@ -400,8 +429,38 @@ export default function App() {
       setPlayers(prev => prev.map(p =>
         p.username === currentUser.username ? { ...p, lives: globalLives } : p
       ));
+      // Sync lives ke database setiap kali berubah (bukan hanya saat logout)
+      api.updateLives(currentUser.username, globalLives).catch(() => {});
     }
   }, [globalLives, currentUser]);
+
+  // ─── PERSIST DATA ON BROWSER CLOSE / REFRESH ─────────────────────────────
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (!currentUser || !api.isLoggedIn()) return;
+
+      // Simpan revive countdown ke localStorage agar persisten
+      if (reviveCountdown > 0) {
+        const endTime = Date.now() + reviveCountdown * 1000;
+        localStorage.setItem('nms_revive_end', endTime.toString());
+        localStorage.setItem('nms_revive_queue', reviveLivesQueue.toString());
+      }
+
+      // Hanya player yang perlu kirim progress; developer tidak punya progress level
+      if (currentUser.role === 'player') {
+        // Kumpulkan semua level yang sudah diselesaikan
+        const completedProgress = levels
+          .filter(l => l.stars !== undefined && !l.isUserCreated)
+          .map(l => ({ levelId: l.id, stars: l.stars as number, timeUsed: undefined }));
+
+        // Kirim lives + progress sekaligus via sendBeacon (non-blocking saat unload)
+        api.bulkProgressBeacon(currentUser.username, globalLives, completedProgress);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentUser, globalLives, reviveCountdown, reviveLivesQueue, levels]);
 
   // ─── TIMERS ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -553,12 +612,17 @@ export default function App() {
   const handleTimeUp = () => {
     const lives = globalLives - 1;
     setGlobalLives(lives);
+    // Sync lives ke backend setiap kali berubah
+    if (!testMode && currentUser) {
+      api.updateLives(currentUser.username, Math.max(0, lives)).catch(() => {});
+    }
     if (lives <= 0) {
       setShowWinModal(false);
       setShowValidationModal(false);
       setCurrentLevel(null);
       if (!testMode) setScreen('player-gallery');
       setTimeout(() => setShowReviveModal(true), 300);
+      setTimeout(() => startReviveCountdown(0), 300);
     } else {
       // Reset level: restart timer and reset player values to initial
       setTimeLeft(currentLevel?.timeLimit || 90);
@@ -570,6 +634,8 @@ export default function App() {
       }
       setHintsUsed(0);
       setHintRevealed([]);
+      // Mulai countdown untuk nyawa yang baru hilang
+      if (!testMode) startReviveCountdown(lives);
     }
   };
 
@@ -688,9 +754,11 @@ export default function App() {
         setCurrentLevel(null);
         if (!testMode) setScreen('player-gallery');
         // Auto-start countdown: 1 life restored every 5 minutes
-        setTimeout(() => startReviveCountdown(), 300);
+        setTimeout(() => startReviveCountdown(0), 300);
       } else {
         setShowValidationModal(true);
+        // Mulai countdown untuk nyawa yang baru hilang
+        if (!testMode) startReviveCountdown(newLives);
       }
     }
   };
@@ -700,7 +768,12 @@ export default function App() {
     setLevels(prev => prev.map(level => {
       const saved = progress[level.id];
       if (saved) {
-        return { ...level, stars: saved.stars, isLocked: !saved.unlocked };
+        return {
+          ...level,
+          // stars: hanya set jika ada (level belum selesai = stars null/undefined dari DB)
+          stars: saved.stars != null ? saved.stars : undefined,
+          isLocked: !saved.unlocked,
+        };
       }
       // Default: first built-in level unlocked, rest locked
       const builtInLevels = ALL_DASAR_LEVELS;
@@ -804,26 +877,38 @@ export default function App() {
     } else {
       const lives = globalLives - 1;
       setGlobalLives(lives);
+      // Sync lives ke backend
+      if (currentUser) {
+        api.updateLives(currentUser.username, Math.max(0, lives)).catch(() => {});
+      }
       setScreen('player-gallery');
-      if (lives <= 0) setTimeout(() => startReviveCountdown(), 300);
+      if (lives <= 0) setTimeout(() => startReviveCountdown(0), 300);
+      else startReviveCountdown(lives);
     }
   };
 
-  const startReviveCountdown = () => {
-    // Don't start countdown if lives are already full
-    if (globalLives >= 3) return;
-    // Restore 1 life every 5 minutes (not all at once)
-    const newQueue = reviveLivesQueue + 1;
-    setReviveLivesQueue(newQueue);
-    if (reviveCountdown <= 0) {
-      const endTime = Date.now() + 300_000;
-      localStorage.setItem('nms_revive_end', endTime.toString());
+  const startReviveCountdown = (currentLives?: number) => {
+    // Hitung berapa nyawa yang perlu dipulihkan
+    const livesNow = currentLives ?? globalLives;
+    if (livesNow >= 3) return; // sudah penuh, tidak perlu countdown
+    const livesNeeded = 3 - livesNow; // contoh: 0 nyawa → butuh 3, 1 nyawa → butuh 2, dll.
+
+    setReviveLivesQueue(prev => {
+      const newQueue = Math.max(prev, livesNeeded); // jangan double-count jika countdown sudah jalan
       localStorage.setItem('nms_revive_queue', newQueue.toString());
-      setReviveCountdown(300); // 5 min per life
-    } else {
-      // Already counting — just update queue in storage
-      localStorage.setItem('nms_revive_queue', newQueue.toString());
-    }
+      return newQueue;
+    });
+
+    setReviveCountdown(prev => {
+      if (prev <= 0) {
+        // Belum ada countdown aktif — mulai sekarang
+        const endTime = Date.now() + 300_000;
+        localStorage.setItem('nms_revive_end', endTime.toString());
+        return 300;
+      }
+      // Countdown sudah berjalan — biarkan terus, queue sudah diperbarui di atas
+      return prev;
+    });
   };
 
   const handleLivesClick = () => {
@@ -876,14 +961,44 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    // Sync lives to backend before logging out
-    if (currentUser?.role === 'player') {
+    // Kumpulkan semua progress level yang sudah diselesaikan dari state
+    const completedProgress = levels.filter(l => l.stars !== undefined && !l.isUserCreated);
+
+    if (currentUser?.role === 'player' && completedProgress.length > 0) {
+      try {
+        // Sync lives terlebih dahulu
+        await api.updateLives(currentUser.username, globalLives);
+        // Sync semua progress level yang sudah selesai ke database (fire and forget, jangan block logout)
+        const syncAll = completedProgress.map(l =>
+          api.updateProgress(currentUser.username, {
+            levelId: l.id,
+            stars: l.stars,
+            unlockNextLevelId: undefined,
+          }).catch(() => {})
+        );
+        // Tunggu maksimal 3 detik agar tidak terlalu lama
+        await Promise.race([
+          Promise.all(syncAll),
+          new Promise(resolve => setTimeout(resolve, 3000)),
+        ]);
+      } catch {}
+    } else if (currentUser?.role === 'player') {
       try {
         await api.updateLives(currentUser.username, globalLives);
       } catch {}
     }
+
     api.logout();
+    // Bersihkan localStorage terkait game
+    localStorage.removeItem('nms_level_progress');
+    localStorage.removeItem('nms_revive_end');
+    localStorage.removeItem('nms_revive_queue');
+    localStorage.removeItem('nms_dev_leaderboard');
+
     setCurrentUser(null);
+    setGlobalLives(3);
+    setReviveCountdown(0);
+    setReviveLivesQueue(0);
     setLoginUsername('');
     setLoginPassword('');
     setLoginRole(null);
@@ -895,8 +1010,11 @@ export default function App() {
     setRegError('');
     setRegSuccess('');
     setDevTab('overview');
+    setDevPlayers([]);
+    setDevLeaderboard([]);
+    setLeaderboardData([]);
     resetLevelsToDefault();
-    setScreen('splash');
+    setScreen('login');
   };
 
   const handleGoHome = () => {
@@ -921,6 +1039,15 @@ export default function App() {
     const shown = local.substring(0, 1);
     const masked = '*'.repeat(Math.max(local.length - 1, 3));
     return `${shown}${masked}@${domain}`;
+  };
+
+  // Format detik menjadi "Xm Ys" — dipakai di leaderboard
+  const formatTime = (seconds: number): string => {
+    if (!seconds || seconds <= 0) return '-';
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m === 0) return `${s}s`;
+    return `${m}m ${s}s`;
   };
 
   const completedLevels = levels.filter(l => l.stars !== undefined).length;
@@ -1442,7 +1569,7 @@ export default function App() {
                           <td className="px-6 py-3 text-center" style={{ color: '#4ADE80', fontWeight: 700 }}>{p.levelsPlayed}</td>
                           <td className="px-6 py-3 text-center" style={{ color: '#FFD93D', fontWeight: 700 }}>⭐ {p.stars}</td>
                           <td className="px-6 py-3 text-center" style={{ color: '#A78BFA', fontWeight: 600, fontFamily: 'monospace' }}>
-                            {p.totalTime > 0 ? `${p.totalTime}s` : '-'}
+                            {formatTime(p.totalTime)}
                           </td>
                           <td className="px-6 py-3 text-center" style={{ color: '#9CA3AF', fontWeight: 600, fontSize: '0.85rem' }}>
                             {playerDetail?.createdAt ? formatDate(playerDetail.createdAt) : '-'}
@@ -2202,7 +2329,7 @@ export default function App() {
                             </td>
                             <td className="px-5 py-3 text-center" style={{ color: '#FFD93D', fontWeight: 700 }}>⭐ {p.stars}</td>
                             <td className="px-5 py-3 text-center" style={{ color: '#A78BFA', fontWeight: 600, fontFamily: 'monospace' }}>
-                              {p.totalTime > 0 ? `${p.totalTime}s` : '-'}
+                              {formatTime(p.totalTime)}
                             </td>
                           </tr>
                         ))}

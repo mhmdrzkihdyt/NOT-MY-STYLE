@@ -43,7 +43,9 @@ router.get('/:username', authenticate, requireDeveloper, async (req: AuthRequest
 
     // Ambil data progres menggunakan PostgreSQL parameter
     const progressResult = await pool.query(
-      'SELECT "LevelId", "Stars", "IsUnlocked", "BestTime", "Score" FROM "PlayerProgress" WHERE "Username" = $1',
+      `SELECT "LevelId" AS "levelId", "Stars" AS "stars", "IsUnlocked" AS "isUnlocked", 
+              "BestTime" AS "bestTime", "Score" AS "score"
+       FROM "PlayerProgress" WHERE "Username" = $1`,
       [req.params.username]
     );
 
@@ -59,7 +61,7 @@ router.get('/:username', authenticate, requireDeveloper, async (req: AuthRequest
       stars: u.TotalStars, 
       totalTime: u.TotalTime,
       createdAt: u.CreatedAt, 
-      progress: progressResult.rows, // Menggunakan .rows
+      progress: progressResult.rows,
     });
   } catch (err: any) {
     console.error('[PLAYERS] Detail error:', err.message);

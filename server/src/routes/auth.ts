@@ -96,13 +96,14 @@ router.post('/login', async (req: AuthRequest, res: Response) => {
 
     // Load player progress
     const progress = await pool.query(
-      'SELECT "LevelId", "Stars", "IsUnlocked", "BestTime" FROM "PlayerProgress" WHERE "Username" = $1',
+      `SELECT "LevelId" AS "levelId", "Stars" AS "stars", "IsUnlocked" AS "isUnlocked", "BestTime" AS "bestTime"
+       FROM "PlayerProgress" WHERE "Username" = $1`,
       [u.Username]
     );
 
     const levelProgress: Record<string, any> = {};
     for (const p of progress.rows) {
-      levelProgress[p.LevelId] = { stars: p.Stars, unlocked: !!p.IsUnlocked, timeUsed: p.BestTime };
+      levelProgress[p.levelId] = { stars: p.stars, unlocked: !!p.isUnlocked, timeUsed: p.bestTime };
     }
 
     const token = jwt.sign({ id: u.Id, username: u.Username, role: u.Role }, JWT_SECRET, { expiresIn: '7d' });
@@ -138,13 +139,14 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
 
     const u = result.rows[0];
     const progress = await pool.query(
-      'SELECT "LevelId", "Stars", "IsUnlocked", "BestTime" FROM "PlayerProgress" WHERE "Username" = $1',
+      `SELECT "LevelId" AS "levelId", "Stars" AS "stars", "IsUnlocked" AS "isUnlocked", "BestTime" AS "bestTime"
+       FROM "PlayerProgress" WHERE "Username" = $1`,
       [u.Username]
     );
 
     const levelProgress: Record<string, any> = {};
     for (const p of progress.rows) {
-      levelProgress[p.LevelId] = { stars: p.Stars, unlocked: !!p.IsUnlocked, timeUsed: p.BestTime };
+      levelProgress[p.levelId] = { stars: p.stars, unlocked: !!p.isUnlocked, timeUsed: p.bestTime };
     }
 
     res.json({
