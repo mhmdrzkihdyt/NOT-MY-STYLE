@@ -57,3 +57,50 @@ router.get('/', authenticate, async (_req: AuthRequest, res: Response) => {
 });
 
 export default router;
+
+// POST /api/leaderboard/recalculate-all - Recalculate stats semua player dari PlayerProgress
+// Dipanggil oleh developer saat load overview agar data leaderboard selalu akurat
+router.post('/recalculate-all', authenticate, async (_req: AuthRequest, res: Response) => {
+  try {
+    const pool = await getPool();
+
+    // Ambil semua username player
+    const players = await pool.query(
+      'SELECT "Username" AS "username" FROM "Users" WHERE "Role" = \'player\''
+    );
+
+    for (const row of players.rows) {
+      const username = row.username;
+      if (!username) continue;
+
+      const agg = await pool.query(
+        `SELECT
+           COUNT(*)          FILTER (WHERE "Stars" IS NOT NULL AND "Attempts" > 0) AS "levelsPlayed",
+           COALESCE(SUM("Stars")    FILTER (WHERE "Stars"    IS NOT NULL AND "Attempts" > 0), 0) AS "totalStars",
+           COALESCE(SUM("Score")    FILTER (WHERE "Score"    IS NOT NULL AND "Attempts" > 0), 0) AS "totalScore",
+           COALESCE(SUM("BestTime") FILTER (WHERE "BestTime" IS NOT NULL AND "Attempts" > 0), 0) AS "totalTime"
+         FROM "PlayerProgress" WHERE "Username" = $1`,
+        [username]
+      );
+
+      const a = agg.rows[0];
+      await pool.query(
+        `UPDATE "Users"
+         SET "TotalScore"=$1,"LevelsPlayed"=$2,"TotalStars"=$3,"TotalTime"=$4,"UpdatedAt"=NOW()
+         WHERE "Username"=$5`,
+        [
+          Number(a.totalScore) || 0,
+          Number(a.levelsPlayed) || 0,
+          Number(a.totalStars) || 0,
+          Number(a.totalTime) || 0,
+          username,
+        ]
+      );
+    }
+
+    res.json({ message: 'All players recalculated', count: players.rows.length });
+  } catch (err: any) {
+    console.error('[LEADERBOARD] Recalculate-all error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});

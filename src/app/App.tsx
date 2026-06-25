@@ -307,64 +307,69 @@ export default function App() {
 
   // ─── LOAD DEV LEADERBOARD WHEN OVERVIEW TAB ─────────────────────────────
   useEffect(() => {
-    if (devTab === 'overview' && currentUser?.role === 'developer') {
+    if (devTab !== 'overview' || currentUser?.role !== 'developer') return;
+
+    const loadDevLeaderboard = async () => {
       setDevLeaderboardLoading(true);
-      api.getLeaderboard()
-        .then(data => {
-          setDevLeaderboard(data);
-          localStorage.setItem('nms_dev_leaderboard', JSON.stringify(data));
-          setDevLeaderboardLoading(false);
-        })
-        .catch(err => {
-          console.error('[API] Failed to load dev leaderboard:', err.message);
-          // Fallback: try localStorage
-          const cached = localStorage.getItem('nms_dev_leaderboard');
-          if (cached) {
-            try { setDevLeaderboard(JSON.parse(cached)); } catch {}
-          }
-          setDevLeaderboardLoading(false);
-        });
-    }
+      try {
+        // Recalculate stats semua player dulu agar data akurat
+        await api.recalculateAllStats();
+      } catch {}
+      try {
+        const data = await api.getLeaderboard();
+        setDevLeaderboard(data);
+        localStorage.setItem('nms_dev_leaderboard', JSON.stringify(data));
+      } catch (err: any) {
+        console.error('[API] Failed to load dev leaderboard:', err.message);
+        const cached = localStorage.getItem('nms_dev_leaderboard');
+        if (cached) {
+          try { setDevLeaderboard(JSON.parse(cached)); } catch {}
+        }
+      } finally {
+        setDevLeaderboardLoading(false);
+      }
+    };
+
+    loadDevLeaderboard();
   }, [devTab, currentUser]);
 
   // ─── AUTO-LOGIN ON APP LOAD ───────────────────────────────────────────────
+  // ─── AUTO-LOGIN ON APP LOAD ───────────────────────────────────────────────
   useEffect(() => {
-    if (api.isLoggedIn()) {
-      api.getMe().then(user => {
+    if (!api.isLoggedIn()) return;
+
+    const init = async () => {
+      try {
+        const user = await api.getMe();
+
         setCurrentUser({ username: user.username, role: user.role as 'player' | 'developer' });
         setGlobalLives(user.lives);
         applyPlayerProgress(user.levelProgress);
-        // Recalculate stats dari PlayerProgress agar leaderboard akurat
+
+        // Recalculate stats SEBELUM setScreen agar leaderboard & overview langsung akurat
         if (user.role === 'player') {
-          api.recalculateStats(user.username).catch(() => {});
+          try { await api.recalculateStats(user.username); } catch {}
         }
-        // Restore revive countdown — gunakan reviveEndAt dari DB sebagai sumber utama
+
+        // Restore revive countdown — prioritas: DB > localStorage
         if (user.lives < 3) {
           const livesNeeded = 3 - user.lives;
-
-          // Prioritas 1: reviveEndAt dari database (persisten lintas tab/device)
-          // Prioritas 2: localStorage (fallback jika DB belum update)
-          const dbEndAt   = user.reviveEndAt;
-          const lsEndAt   = localStorage.getItem('nms_revive_end');
-          const lsQueue   = localStorage.getItem('nms_revive_queue');
-
-          // Pilih nilai terbesar (paling baru) antara DB dan localStorage
+          const dbEndAt  = user.reviveEndAt;
+          const lsEndAt  = localStorage.getItem('nms_revive_end');
+          const lsQueue  = localStorage.getItem('nms_revive_queue');
           const bestEndAt = Math.max(
-            dbEndAt  ? Number(dbEndAt)  : 0,
-            lsEndAt  ? parseInt(lsEndAt, 10) : 0
+            dbEndAt ? Number(dbEndAt) : 0,
+            lsEndAt ? parseInt(lsEndAt, 10) : 0
           );
           const bestQueue = lsQueue ? Math.max(parseInt(lsQueue, 10), livesNeeded) : livesNeeded;
 
           if (bestEndAt > Date.now()) {
-            // Countdown masih valid — lanjutkan dari sisa waktu
             const remaining = Math.floor((bestEndAt - Date.now()) / 1000);
             setReviveLivesQueue(bestQueue);
             setReviveCountdown(remaining);
-            // Sinkronkan localStorage dengan nilai terbaru
             localStorage.setItem('nms_revive_end', bestEndAt.toString());
             localStorage.setItem('nms_revive_queue', bestQueue.toString());
           } else {
-            // Countdown sudah kedaluwarsa atau belum ada — mulai baru
             const newEndAt = Date.now() + 300_000;
             localStorage.setItem('nms_revive_end', newEndAt.toString());
             localStorage.setItem('nms_revive_queue', livesNeeded.toString());
@@ -372,9 +377,10 @@ export default function App() {
             setReviveCountdown(300);
           }
         }
+
         setScreen(user.role === 'developer' ? 'developer' : 'player-gallery');
-      }).catch(() => {
-        // Fallback: try to restore from localStorage
+      } catch {
+        // Fallback: gunakan data dari localStorage
         const savedProgress = localStorage.getItem('nms_level_progress');
         if (savedProgress) {
           try { applyPlayerProgress(JSON.parse(savedProgress)); } catch {}
@@ -383,28 +389,27 @@ export default function App() {
         if (savedUser) {
           setCurrentUser({ username: savedUser.username, role: savedUser.role as 'player' | 'developer' });
           setGlobalLives(savedUser.lives);
-          // Restore countdown
           if (savedUser.lives < 3) {
-            const savedEnd = localStorage.getItem('nms_revive_end');
-            const savedQueue = localStorage.getItem('nms_revive_queue');
             const livesNeeded = 3 - (savedUser.lives ?? 3);
+            const savedEnd   = localStorage.getItem('nms_revive_end');
+            const savedQueue = localStorage.getItem('nms_revive_queue');
             if (savedEnd) {
-              const endTime = parseInt(savedEnd, 10);
+              const endTime   = parseInt(savedEnd, 10);
               const remaining = Math.floor((endTime - Date.now()) / 1000);
               if (remaining > 0) {
                 const queue = savedQueue ? Math.max(parseInt(savedQueue, 10), livesNeeded) : livesNeeded;
                 setReviveLivesQueue(queue);
                 setReviveCountdown(remaining);
               } else {
-                const endTime2 = Date.now() + 300_000;
-                localStorage.setItem('nms_revive_end', endTime2.toString());
+                const newEnd = Date.now() + 300_000;
+                localStorage.setItem('nms_revive_end', newEnd.toString());
                 localStorage.setItem('nms_revive_queue', livesNeeded.toString());
                 setReviveLivesQueue(livesNeeded);
                 setReviveCountdown(300);
               }
             } else {
-              const endTime2 = Date.now() + 300_000;
-              localStorage.setItem('nms_revive_end', endTime2.toString());
+              const newEnd = Date.now() + 300_000;
+              localStorage.setItem('nms_revive_end', newEnd.toString());
               localStorage.setItem('nms_revive_queue', livesNeeded.toString());
               setReviveLivesQueue(livesNeeded);
               setReviveCountdown(300);
@@ -414,11 +419,11 @@ export default function App() {
         } else {
           api.logout();
         }
-      });
-    }
-  }, []);
+      }
+    };
 
-  // ─── SAVE LEVEL PROGRESS TO LOCALSTORAGE ─────────────────────────────────
+    init();
+  }, []);  // ─── SAVE LEVEL PROGRESS TO LOCALSTORAGE ─────────────────────────────────
   useEffect(() => {
     const progress: Record<string, LevelProgress> = {};
     levels.forEach(l => {
@@ -1086,9 +1091,9 @@ export default function App() {
       setCurrentUser({ username: res.user.username, role: res.user.role as 'player' | 'developer' });
       setGlobalLives(res.user.lives);
       applyPlayerProgress(res.user.levelProgress);
-      // Recalculate stats setelah login agar leaderboard akurat
+      // Recalculate stats SEBELUM setScreen agar leaderboard langsung akurat
       if (res.user.role === 'player') {
-        api.recalculateStats(res.user.username).catch(() => {});
+        try { await api.recalculateStats(res.user.username); } catch {}
         // Restore revive countdown jika lives < 3
         if (res.user.lives < 3) {
           const livesNeeded = 3 - res.user.lives;
